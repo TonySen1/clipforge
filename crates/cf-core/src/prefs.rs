@@ -125,6 +125,10 @@ pub struct Preferences {
     /// Preferred preview height cap; resolution is further capped by source.
     pub preview_max_height: u32,
     pub preview_quality: PreviewQuality,
+    /// Drop empty spans between clips instead of rendering them as black and
+    /// silence. Lossless export cannot represent gaps at all, so this also
+    /// decides whether a gapped timeline can be exported losslessly.
+    pub remove_gaps_on_export: bool,
 }
 
 impl Default for Preferences {
@@ -136,6 +140,7 @@ impl Default for Preferences {
             ffmpeg_path: None,
             preview_max_height: 720,
             preview_quality: PreviewQuality::default(),
+            remove_gaps_on_export: false,
         }
     }
 }
@@ -225,6 +230,7 @@ mod tests {
             ffmpeg_path: None,
             preview_max_height: 720,
             preview_quality: PreviewQuality::default(),
+            remove_gaps_on_export: true,
         };
 
         let dir = std::env::temp_dir().join("clipforge-prefs-test");

@@ -68,6 +68,39 @@ pub fn show(ctx: &Context, p: &Palette, prefs: &mut Preferences) -> SettingsActi
                         }
                     }
                 });
+
+                ui.add_space(16.0);
+                divider(ui, p);
+                ui.add_space(12.0);
+
+                section(ui, p, &tr("settings.export"));
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(tr("settings.remove_gaps"))
+                        .size(13.0)
+                        .color(p.text_secondary),
+                );
+                ui.add_space(4.0);
+                // Segmented On/Off like the controls above; a raw checkbox is
+                // almost invisible against the elevated dialog surface.
+                ui.horizontal(|ui| {
+                    for enabled in [true, false] {
+                        let label = if enabled {
+                            tr("settings.on")
+                        } else {
+                            tr("settings.off")
+                        };
+                        if option(ui, p, prefs.remove_gaps_on_export == enabled, &label).clicked() {
+                            prefs.remove_gaps_on_export = enabled;
+                        }
+                    }
+                });
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new(tr("settings.remove_gaps_hint"))
+                        .size(11.0)
+                        .color(p.text_muted),
+                );
             });
 
             ui.add_space(18.0);
@@ -80,7 +113,10 @@ pub fn show(ctx: &Context, p: &Palette, prefs: &mut Preferences) -> SettingsActi
 
     if close || response.should_close() {
         SettingsAction::Close
-    } else if prefs.theme != before.theme || prefs.locale != before.locale {
+    } else if prefs.theme != before.theme
+        || prefs.locale != before.locale
+        || prefs.remove_gaps_on_export != before.remove_gaps_on_export
+    {
         SettingsAction::Changed
     } else {
         SettingsAction::None

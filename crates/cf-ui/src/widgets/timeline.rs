@@ -5,7 +5,7 @@
 //! `TimelineAction`. The app layer decides what those actions mean.
 
 use crate::theme::{Metrics, Palette};
-use crate::widgets::snap::{self, SnapResult};
+use crate::widgets::snap::{self, SnapKind, SnapResult};
 use crate::widgets::timeline_view::{format_tick, visible_ticks, TimelineView, TRACK_HEAD_WIDTH};
 use cf_core::domain::{ClipRef, TrackKind};
 use cf_core::time::Time;
@@ -54,8 +54,8 @@ pub enum TimelineAction {
         edge: DragEdge,
         grab_offset: Time,
     },
-    /// The pointer moved during a drag. `at` is the snapped timeline position
-    /// the grabbed edge should land on.
+    /// The pointer moved during a drag. `at` is where the clipboard goes:
+    /// body drags report the clip's start, trims report the moving edge.
     DragMoved {
         at: Time,
         snap: SnapResult,
@@ -677,18 +677,18 @@ fn handle_pointer(
         if let Some(pos) = live_pos {
             // Clamp vertically away: only x matters while scrubbing.
             let x = (pos.x - body_left).max(0.0);
-            let time = view.x_to_time(x);
+            let time = scrub_time(view, input, x);
             actions.push(TimelineAction::Seek {
-                time: time.min(input.content_end),
+                time,
                 precise: false,
             });
         }
     } else if input.scrubbing && released {
         if let Some(pos) = live_pos {
             let x = (pos.x - body_left).max(0.0);
-            let time = view.x_to_time(x);
+            let time = scrub_time(view, input, x);
             actions.push(TimelineAction::Seek {
-                time: time.min(input.content_end),
+                time,
                 precise: true,
             });
         }
@@ -733,13 +733,18 @@ fn handle_pointer(
         if pointer_down || released {
             if let Some(pos) = pointer {
                 let x = (pos.x - body_left).max(0.0);
-                let raw = view
-                    .x_to_time(x)
-                    .saturating_sub(drag.grab_offset)
-                    .max(Time::ZERO);
+                let pointer_time = view.x_to_time(x).max(Time::ZERO);
 
-                // Build the clip's edges at the candidate position so both
-                // ends can snap.
+                // `raw` is the value the drag edits: for a body move that is
+                // the clip's start, for a trim it is the edge itself. `snap`
+                // returns a corrected version of the same value, so the app can
+                // commit it without further conversion.
+                let raw = match drag.edge {
+                    DragEdge::Body => pointer_time.saturating_sub(drag.grab_offset),
+                    DragEdge::Start | DragEdge::End => pointer_time,
+                }
+                .max(Time::ZERO);
+
                 let edges = edges_for(input.project, drag, raw);
                 let candidates = snap::candidates(input.project, Some(drag.clip), input.playhead);
                 let mut result = snap::snap(raw, &edges, &candidates, view, snap::SNAP_PX);
@@ -754,7 +759,7 @@ fn handle_pointer(
                 }
 
                 actions.push(TimelineAction::DragMoved {
-                    at: result.time,
+                    at: result.time.max(Time::ZERO),
                     snap: result,
                 });
             }
@@ -843,14 +848,39 @@ fn hit_test(
     None
 }
 
+/// Edges of the dragged clip at the candidate position.
+///
+/// A body drag exposes *both* ends so the clip sticks to a neighbour whichever
+/// side reaches it first. Trimming only moves one edge, so only that edge can
+/// snap. Snapping the grab point instead (as a body drag used to) meant a clip
+/// grabbed in the middle never lined up with anything.
+/// Maps a ruler x to a playhead time, snapping to clip edges and the origin.
+///
+/// Without the snap a scrub can never land exactly on 0 or on a clip edge at
+/// normal zoom levels, which makes "put the playhead at the start" impossible
+/// by mouse alone.
+fn scrub_time(view: &TimelineView, input: &TimelineInput<'_>, x: f32) -> Time {
+    let raw = view.x_to_time(x).min(input.content_end);
+    // Exclude the playhead itself: it is the thing being dragged, so snapping
+    // to its own position would pin the scrub in place.
+    let candidates: Vec<_> = snap::candidates(input.project, None, input.playhead)
+        .into_iter()
+        .filter(|(_, kind)| *kind != SnapKind::Playhead)
+        .collect();
+    let snapped = snap::snap(raw, &[raw], &candidates, view, snap::SNAP_PX);
+    snapped.time.min(input.content_end).max(Time::ZERO)
+}
+
 fn edges_for(project: &cf_core::Project, drag: &DragState, at: Time) -> Vec<Time> {
-    match project.clip(drag.clip) {
-        Some(_entry) => match drag.edge {
-            DragEdge::Body => vec![at.saturating_add(drag.grab_offset)],
-            DragEdge::Start => vec![at],
-            DragEdge::End => vec![at],
-        },
-        None => vec![at],
+    let Some(entry) = project.clip(drag.clip) else {
+        return vec![at];
+    };
+    match drag.edge {
+        DragEdge::Body => {
+            let end = at.saturating_add(entry.clip.duration());
+            vec![at, end]
+        }
+        DragEdge::Start | DragEdge::End => vec![at],
     }
 }
 

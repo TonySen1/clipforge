@@ -34,6 +34,11 @@ settings:
   appearance: Appearance
   theme: Theme
   language: Language
+  export: Export
+  remove_gaps: Remove gaps between clips when exporting
+  remove_gaps_hint: Empty spans are skipped so clips play back to back. The timeline keeps its layout.
+  on: "On"
+  off: "Off"
   close: Close
   saved: Settings saved
 

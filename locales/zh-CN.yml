@@ -34,6 +34,11 @@ settings:
   appearance: 外观
   theme: 主题
   language: 语言
+  export: 导出
+  remove_gaps: 导出时移除片段之间的空隙
+  remove_gaps_hint: 跳过空白区间，让片段直接相接；时间线本身的排布不受影响。
+  on: 开
+  off: 关
   close: 关闭
   saved: 设置已保存
 

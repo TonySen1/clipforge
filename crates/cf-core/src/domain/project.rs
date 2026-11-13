@@ -178,6 +178,23 @@ impl Project {
         self.sources.is_empty()
     }
 
+    /// Removes every empty span by sliding clips left until they touch.
+    ///
+    /// Returns a copy so callers can plan an export without disturbing the
+    /// user's timeline: the gaps are a view/export concern, not an edit.
+    /// Clips keep their source in/out points, so nothing is trimmed.
+    pub fn without_gaps(&self) -> Self {
+        let mut out = self.clone();
+        for track in &mut out.tracks {
+            let mut cursor = Time::ZERO;
+            for clip in &mut track.clips {
+                clip.timeline_start = cursor;
+                cursor = clip.timeline_end();
+            }
+        }
+        out
+    }
+
     pub fn set_playhead(&mut self, t: Time) {
         self.playhead = t.clamp(Time::ZERO, self.duration());
     }
@@ -259,6 +276,40 @@ mod tests {
 
         // Past the end there is nothing to resolve.
         assert!(project.resolve(Time::from_secs(20.0)).is_none());
+    }
+
+    #[test]
+    fn without_gaps_butts_clips_together() {
+        let mut project = project_with(&[3.0, 2.0]);
+        let second = project.video_track().unwrap().clips[1].id;
+        // Leave a 4 s hole between the two clips.
+        project.move_clip(second, Time::from_secs(7.0)).unwrap();
+        assert_eq!(project.duration(), Time::from_secs(9.0));
+
+        let packed = project.without_gaps();
+        let starts: Vec<Time> = packed
+            .video_track()
+            .unwrap()
+            .clips
+            .iter()
+            .map(|c| c.timeline_start)
+            .collect();
+        assert_eq!(starts, vec![Time::ZERO, Time::from_secs(3.0)]);
+        assert_eq!(packed.duration(), Time::from_secs(5.0));
+
+        // Source ranges are untouched: this is a layout change, not a trim.
+        let clip = &packed.video_track().unwrap().clips[1];
+        assert_eq!(clip.source_in, Time::ZERO);
+        assert_eq!(clip.source_out, Time::from_secs(2.0));
+
+        // The original project still has its gap.
+        assert_eq!(project.duration(), Time::from_secs(9.0));
+    }
+
+    #[test]
+    fn without_gaps_keeps_a_contiguous_timeline_unchanged() {
+        let project = project_with(&[4.0, 4.0]);
+        assert_eq!(project.without_gaps(), project);
     }
 
     #[test]

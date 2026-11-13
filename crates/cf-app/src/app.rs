@@ -738,17 +738,32 @@ impl ClipForgeApp {
     /// Called whenever the selection, edit state or output path changes, so
     /// the dialog always shows the cut points the current project would
     /// actually produce.
+    /// The project the export actually encodes.
+    ///
+    /// When "remove gaps on export" is on, empty spans collapse so the output
+    /// jumps straight from one clip to the next. This is a copy: the timeline
+    /// the user sees keeps its layout, and the setting only changes the
+    /// rendered result.
+    fn export_project(&self) -> cf_core::Project {
+        if self.prefs.remove_gaps_on_export {
+            self.project.without_gaps()
+        } else {
+            self.project.clone()
+        }
+    }
+
     fn refresh_export_plan(&mut self) {
         self.export_plan = None;
         self.export_precise_plan = None;
         self.export_blocker = None;
         self.export_compat = None;
 
-        let Ok((start, end)) = self.export_range.resolve(&self.project) else {
+        let project = self.export_project();
+        let Ok((start, end)) = self.export_range.resolve(&project) else {
             return;
         };
 
-        let pieces = match timeline_pieces(&self.project, start, end) {
+        let pieces = match timeline_pieces(&project, start, end) {
             Ok(pieces) => pieces,
             Err(blocker) => {
                 self.export_blocker = Some(blocker);
@@ -765,7 +780,7 @@ impl ClipForgeApp {
         let output = self
             .export_output
             .clone()
-            .unwrap_or_else(|| default_export_path(&real_output_stem(&self.project, &real)));
+            .unwrap_or_else(|| default_export_path(&real_output_stem(&project, &real)));
 
         match self.export_mode {
             ExportMode::Precise => {
@@ -781,7 +796,7 @@ impl ClipForgeApp {
                     Some(engine) => PreciseSettings::for_container(container, &engine.install),
                     None => PreciseSettings::default(),
                 };
-                let plan = plan_precise(&self.project, start, end, settings);
+                let plan = plan_precise(&project, start, end, settings);
                 self.export_blocker = plan.blocker.clone();
                 self.export_precise_plan = Some(plan);
             }
@@ -800,7 +815,7 @@ impl ClipForgeApp {
                     seen
                 };
 
-                let report = check_compat(&self.project, &unique);
+                let report = check_compat(&project, &unique);
                 if !report.is_compatible() {
                     self.export_compat = Some(report.clone());
                     self.export_blocker = Some(
@@ -819,7 +834,7 @@ impl ClipForgeApp {
                 // Keyframes decide the real cut points; without them a lossless
                 // export cannot be planned at all.
                 if real.iter().any(|segment| {
-                    self.project
+                    project
                         .source(segment.source_id)
                         .map(|source| source.keyframes.is_degraded())
                         .unwrap_or(true)
@@ -832,7 +847,7 @@ impl ClipForgeApp {
                 // Reuse the single-clip planner for the whole range so the
                 // dialog keeps showing real cut points and drift.
                 let Some(first) = real.first() else { return };
-                let Some(source) = self.project.source(first.source_id) else {
+                let Some(source) = project.source(first.source_id) else {
                     self.export_blocker =
                         Some(cf_core::media::export::ExportBlocker::MissingSource);
                     return;
@@ -967,18 +982,18 @@ impl ClipForgeApp {
                 };
                 let sources = self.job_sources();
 
-                let Ok((range_start, range_end)) = self.export_range.resolve(&self.project) else {
+                let project = self.export_project();
+                let Ok((range_start, range_end)) = self.export_range.resolve(&project) else {
                     return;
                 };
-                let pieces =
-                    timeline_pieces(&self.project, range_start, range_end).unwrap_or_default();
+                let pieces = timeline_pieces(&project, range_start, range_end).unwrap_or_default();
                 let real = only_segments(&pieces);
 
                 if real.len() <= 1 {
                     // Single segment: the plain stream copy, which keeps the
                     // source's own container nuances.
                     let Some(segment) = real.first() else { return };
-                    let Some(source) = self.project.source(segment.source_id) else {
+                    let Some(source) = project.source(segment.source_id) else {
                         return;
                     };
                     ExportJob::LosslessSingle {
@@ -1013,10 +1028,11 @@ impl ClipForgeApp {
 
     /// One entry per source the current export touches.
     fn job_sources(&self) -> Vec<JobSource> {
-        let Ok((start, end)) = self.export_range.resolve(&self.project) else {
+        let project = self.export_project();
+        let Ok((start, end)) = self.export_range.resolve(&project) else {
             return Vec::new();
         };
-        let Ok(pieces) = timeline_pieces(&self.project, start, end) else {
+        let Ok(pieces) = timeline_pieces(&project, start, end) else {
             return Vec::new();
         };
 
@@ -1025,7 +1041,7 @@ impl ClipForgeApp {
             if out.iter().any(|s| s.id == segment.source_id) {
                 continue;
             }
-            if let Some(source) = self.project.source(segment.source_id) {
+            if let Some(source) = project.source(segment.source_id) {
                 out.push(JobSource {
                     id: source.id,
                     path: source.path().clone(),
@@ -1269,15 +1285,20 @@ impl ClipForgeApp {
                     self.selected_clip = Some(clip);
                     // Snapshot once: the whole drag becomes a single undo step.
                     self.drag_before = Some(self.project.clone());
+                    // `preview_at` is always the clip's left edge. A body drag
+                    // reports the raw pointer time; converting here once means
+                    // every consumer (ghost drawing, commit) works in the same
+                    // space.
+                    let start = self
+                        .project
+                        .clip(clip)
+                        .map(|entry| entry.clip.timeline_start)
+                        .unwrap_or(cf_core::Time::ZERO);
                     self.drag = Some(DragState {
                         clip,
                         edge,
                         grab_offset,
-                        preview_at: self
-                            .project
-                            .clip(clip)
-                            .map(|entry| entry.clip.timeline_start)
-                            .unwrap_or(cf_core::Time::ZERO),
+                        preview_at: start,
                         snap: None,
                     });
                 }
@@ -1479,23 +1500,28 @@ impl ClipForgeApp {
 
         // `consume_key` matches the exact modifier set, so Ctrl+Shift+Z cannot
         // be swallowed by the Ctrl+Z branch and vice versa.
-        let (space, split, delete, undo, redo, merge, left, right) = ctx.input_mut(|i| {
-            (
-                i.consume_key(Modifiers::NONE, Key::Space),
-                i.consume_key(Modifiers::NONE, Key::S),
-                i.consume_key(Modifiers::NONE, Key::Delete)
-                    || i.consume_key(Modifiers::NONE, Key::Backspace),
-                i.consume_key(Modifiers::COMMAND, Key::Z),
-                i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z),
-                i.consume_key(Modifiers::NONE, Key::M),
-                // Shift+arrow must be matched separately: `consume_key(NONE, ..)`
-                // only fires when no modifier is held.
-                i.consume_key(Modifiers::NONE, Key::ArrowLeft)
-                    || i.consume_key(Modifiers::SHIFT, Key::ArrowLeft),
-                i.consume_key(Modifiers::NONE, Key::ArrowRight)
-                    || i.consume_key(Modifiers::SHIFT, Key::ArrowRight),
-            )
-        });
+        let (space, split, delete, undo, redo, merge, left, right, jump_start, jump_end) = ctx
+            .input_mut(|i| {
+                (
+                    i.consume_key(Modifiers::NONE, Key::Space),
+                    i.consume_key(Modifiers::NONE, Key::S),
+                    i.consume_key(Modifiers::NONE, Key::Delete)
+                        || i.consume_key(Modifiers::NONE, Key::Backspace),
+                    i.consume_key(Modifiers::COMMAND, Key::Z),
+                    i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z),
+                    i.consume_key(Modifiers::NONE, Key::M),
+                    // Shift+arrow must be matched separately: `consume_key(NONE, ..)`
+                    // only fires when no modifier is held.
+                    i.consume_key(Modifiers::NONE, Key::ArrowLeft)
+                        || i.consume_key(Modifiers::SHIFT, Key::ArrowLeft),
+                    i.consume_key(Modifiers::NONE, Key::ArrowRight)
+                        || i.consume_key(Modifiers::SHIFT, Key::ArrowRight),
+                    // Up/Down jump to the ends of the clip under the playhead,
+                    // Home/End to the ends of the whole timeline.
+                    i.consume_key(Modifiers::NONE, Key::ArrowUp),
+                    i.consume_key(Modifiers::NONE, Key::ArrowDown),
+                )
+            });
 
         if space {
             if self.playing_preview {
@@ -1541,6 +1567,44 @@ impl ClipForgeApp {
             self.project.nudge_playhead(signed);
             self.request_seek(true);
         }
+
+        if jump_start {
+            self.jump_to_clip_edge(true);
+        }
+        if jump_end {
+            self.jump_to_clip_edge(false);
+        }
+    }
+
+    /// Up/Down move the playhead to the start/end of the clip it is inside.
+    ///
+    /// Falls back to the timeline ends when the playhead sits in a gap, so the
+    /// keys always do something predictable.
+    fn jump_to_clip_edge(&mut self, start: bool) {
+        let Some(track) = self.project.video_track() else {
+            return;
+        };
+        let target = track
+            .clip_at(self.project.playhead)
+            .map(|clip| {
+                if start {
+                    clip.timeline_start
+                } else {
+                    clip.timeline_end()
+                }
+            })
+            .unwrap_or(if start {
+                cf_core::Time::ZERO
+            } else {
+                self.project.duration()
+            });
+
+        self.stop_playback();
+        self.project.set_playhead(target);
+        self.audio_span = None;
+        self.audio_pending_start = None;
+        self.audio.clear();
+        self.request_seek(true);
     }
 
     fn media_sidebar(&mut self, ui: &mut Ui) {
