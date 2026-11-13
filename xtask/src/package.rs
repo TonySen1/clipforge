@@ -439,9 +439,9 @@ mod tests {
 
     #[test]
     fn quickstart_mentions_ffmpeg_and_limitations() {
-        let text = quickstart("0.1.0");
+        let text = quickstart("9.9.9");
         assert!(text.contains("FFmpeg"));
-        assert!(text.contains("0.1.0"));
+        assert!(text.contains("9.9.9"));
         assert!(text.contains("keyframes"));
         assert!(text.contains("bin"));
     }
