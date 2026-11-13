@@ -53,7 +53,7 @@
 
 从 [Releases](https://github.com/TonySen1/clipforge/releases) 下载：
 
-- **安装版** `ClipForge-<version>-win64-setup.exe` —— 安装到当前用户目录，带开始菜单快捷方式与卸载项
+- **安装版** `ClipForge-<version>-win64-setup.exe` —— 安装到当前用户目录，开始菜单快捷方式默认创建，桌面快捷方式可选
 - **免安装版** `clipforge-<version>-x86_64-pc-windows-msvc.zip` —— 解压即用，删除目录即卸载
 
 ### 前置依赖：FFmpeg
@@ -174,7 +174,8 @@ ClipForge-<version>-win64-setup.exe           安装包（需要 NSIS；缺失�
 ```
 
 安装包由 `xtask` 生成 NSIS 脚本后调用 `makensis`，安装到 `%LOCALAPPDATA%\Programs\ClipForge`，
-普通用户权限即可。FFmpeg 不随包分发（GPL 原因，详见 `THIRD_PARTY.md`）。
+普通用户权限即可。安装向导里「开始菜单快捷方式」默认勾选，「桌面快捷方式」默认不勾选，
+安装完成页可选择立即启动。FFmpeg 不随包分发（GPL 原因，详见 `THIRD_PARTY.md`）。
 
 ## 已知限制
 

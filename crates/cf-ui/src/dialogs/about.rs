@@ -74,10 +74,6 @@ pub fn show(
                 if subtle_button(ui, p, tr("about.close")).clicked() {
                     close = true;
                 }
-                ui.add_space(8.0);
-                if repo_button(ui, p, icons, 20.0) {
-                    ui.ctx().open_url(OpenUrl::new_tab(REPOSITORY_URL));
-                }
             });
         });
 

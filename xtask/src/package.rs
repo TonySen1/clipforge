@@ -171,27 +171,82 @@ SetCompressor /SOLID lzma
 Name "ClipForge {version}"
 OutFile "{out}"
 InstallDir "$LOCALAPPDATA\Programs\ClipForge"
+InstallDirRegKey HKCU "Software\ClipForge" "InstallDir"
 RequestExecutionLevel user
-Page directory
-Page instfiles
 
-Section "ClipForge" SecMain
+!include "MUI2.nsh"
+!define MUI_ABORTWARNING
+
+; `MUI_FINISHPAGE_RUN_TEXT` is expanded at define time, before the language
+; tables exist, so it carries a literal bilingual label instead of $(RunApp).
+!define MUI_FINISHPAGE_RUN "$INSTDIR\clipforge.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "启动 ClipForge / Launch ClipForge"
+
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_COMPONENTS
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
+; MUI requires the language macros after the page macros and before any
+; `Section` that references `$(...)` names.
+!insertmacro MUI_LANGUAGE "SimpChinese"
+!insertmacro MUI_LANGUAGE "English"
+
+LangString SecMain          ${{LANG_SIMPCHINESE}} "ClipForge（必需）"
+LangString SecMain          ${{LANG_ENGLISH}}      "ClipForge (required)"
+LangString SecMainDesc      ${{LANG_SIMPCHINESE}} "程序文件、卸载程序与系统中的应用条目。"
+LangString SecMainDesc      ${{LANG_ENGLISH}}      "Program files, the uninstaller and the system entry."
+LangString SecStartMenu     ${{LANG_SIMPCHINESE}} "开始菜单快捷方式"
+LangString SecStartMenu     ${{LANG_ENGLISH}}      "Start menu shortcuts"
+LangString SecStartMenuDesc ${{LANG_SIMPCHINESE}} "在开始菜单中创建 ClipForge 文件夹，包含启动与卸载。"
+LangString SecStartMenuDesc ${{LANG_ENGLISH}}      "Creates a ClipForge folder in the Start menu with launch and uninstall entries."
+LangString SecDesktop       ${{LANG_SIMPCHINESE}} "桌面快捷方式"
+LangString SecDesktop       ${{LANG_ENGLISH}}      "Desktop shortcut"
+LangString SecDesktopDesc   ${{LANG_SIMPCHINESE}} "在桌面创建 ClipForge 图标（默认不勾选）。"
+LangString SecDesktopDesc   ${{LANG_ENGLISH}}      "Puts a ClipForge icon on the desktop (off by default)."
+
+Section "$(SecMain)" SecMain
   SetOutPath "$INSTDIR"
   File /r "{src}\*.*"
   WriteUninstaller "$INSTDIR\uninstall.exe"
+  WriteRegStr HKCU "Software\ClipForge" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge" "DisplayName" "ClipForge"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge" "DisplayVersion" "{version}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge" "DisplayIcon" "$INSTDIR\clipforge.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge" "UninstallString" "$INSTDIR\uninstall.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge" "NoModify" "1"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge" "NoRepair" "1"
+SectionEnd
+
+Section "$(SecStartMenu)" SecStartMenu
+  SetShellVarContext current
   CreateDirectory "$SMPROGRAMS\ClipForge"
   CreateShortcut "$SMPROGRAMS\ClipForge\ClipForge.lnk" "$INSTDIR\clipforge.exe"
   CreateShortcut "$SMPROGRAMS\ClipForge\Uninstall.lnk" "$INSTDIR\uninstall.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge" "DisplayName" "ClipForge"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge" "DisplayVersion" "{version}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge" "UninstallString" "$INSTDIR\uninstall.exe"
 SectionEnd
 
+Section /o "$(SecDesktop)" SecDesktop
+  SetShellVarContext current
+  CreateShortcut "$DESKTOP\ClipForge.lnk" "$INSTDIR\clipforge.exe"
+SectionEnd
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${{SecMain}} "$(SecMainDesc)"
+  !insertmacro MUI_DESCRIPTION_TEXT ${{SecStartMenu}} "$(SecStartMenuDesc)"
+  !insertmacro MUI_DESCRIPTION_TEXT ${{SecDesktop}} "$(SecDesktopDesc)"
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
 Section "Uninstall"
+  Delete "$DESKTOP\ClipForge.lnk"
   Delete "$SMPROGRAMS\ClipForge\ClipForge.lnk"
   Delete "$SMPROGRAMS\ClipForge\Uninstall.lnk"
   RMDir "$SMPROGRAMS\ClipForge"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClipForge"
+  DeleteRegKey HKCU "Software\ClipForge"
   RMDir /r "$INSTDIR"
 SectionEnd
 "#,
@@ -201,14 +256,20 @@ SectionEnd
 
     if icon.is_file() {
         // The icon line only works when the file exists; keep the script valid
-        // either way by appending it conditionally.
+        // either way by inserting it conditionally.
         let with_icon = script.replace(
-            "Page directory",
-            &format!("Icon \"{}\"\nPage directory", win(&icon)),
+            "!insertmacro MUI_PAGE_WELCOME",
+            &format!(
+                "Icon \"{icon}\"\nUninstallIcon \"{icon}\"\n!insertmacro MUI_PAGE_WELCOME",
+                icon = win(&icon)
+            ),
         );
-        std::fs::write(&script_path, with_icon)?;
+        // The script contains Chinese LangStrings; without a BOM makensis
+        // reads it as the ANSI code page and aborts on the first non-ASCII
+        // byte.
+        write_utf8_bom(&script_path, &with_icon)?;
     } else {
-        std::fs::write(&script_path, script)?;
+        write_utf8_bom(&script_path, &script)?;
     }
 
     let status = Command::new(&makensis)
@@ -221,6 +282,15 @@ SectionEnd
     }
 
     Ok(Some(installer_path))
+}
+
+/// Writes an NSIS script as UTF-8 with a BOM, which is what `Unicode true`
+/// expects.
+fn write_utf8_bom(path: &Path, contents: &str) -> Result<()> {
+    let mut bytes = Vec::with_capacity(contents.len() + 3);
+    bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    bytes.extend_from_slice(contents.as_bytes());
+    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
 }
 
 /// Looks for `makensis` on `PATH`, then in the two standard NSIS folders.

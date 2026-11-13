@@ -1,3 +1,7 @@
+// Release builds are a GUI app: launching the exe must not flash a console
+// window. Debug builds keep the console so `env_logger` output stays visible.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod audio;
 mod export;
