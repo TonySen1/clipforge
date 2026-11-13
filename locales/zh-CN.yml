@@ -1,0 +1,184 @@
+app:
+  name: ClipForge
+  tagline: 拖入视频，即刻无损剪切。
+
+toolbar:
+  import: 导入视频
+  export: 导出
+  undo: 撤销
+  redo: 重做
+  settings: 设置
+  about: 关于
+  split: 分割
+  delete: 删除
+  merge: 合并
+
+
+preview:
+  loading: 正在载入画面…
+  loading_hint: 正在解码第一帧
+  empty: 尚未导入视频
+  hint: 将视频拖到这里，或点击“导入视频”。
+
+timeline:
+  title: 时间线
+  empty: 时间线为空
+  zoom: 缩放
+  fit: 适应
+  fit_hint: 适应整个项目（双击轨道区）
+  zoom_in: 放大
+  zoom_out: 缩小
+
+settings:
+  title: 设置
+  appearance: 外观
+  theme: 主题
+  language: 语言
+  close: 关闭
+  saved: 设置已保存
+
+theme:
+  light: 浅色
+  dark: 深色
+  system: 跟随系统
+
+language:
+  en: English
+  zh: 简体中文
+
+about:
+  title: 关于 ClipForge
+  version: 版本
+  license: 许可证
+  license_value: GPL-3.0-or-later
+  ffmpeg: 媒体引擎
+  ffmpeg_value: FFmpeg（GPL 构建，单独分发）
+  font: 界面字体
+  description: 使用 Rust 与 egui 构建的无损视频剪切工具。
+  close: 关闭
+
+drop:
+  title: 松开以导入
+  subtitle: MP4 / MKV / MOV / WebM
+
+status:
+  ready: 就绪
+  importing: 正在导入
+  imported: 已导入
+  import_failed: 导入失败
+  engine_missing: FFmpeg 不可用 · 无法导入视频
+  edit_failed: 操作失败
+  undone: 已撤销
+  redone: 已重做
+  exported: 导出完成
+  export_failed: 导出失败
+  export_cancelled: 已取消导出
+
+media:
+  sources: 媒体
+  no_sources: 尚未导入媒体
+  metadata: 片段详情
+  select_hint: 选择一个片段以查看详情
+  duration: 时长
+  resolution: 分辨率
+  frame_rate: 帧率
+  video_codec: 视频编码
+  audio_codec: 音频编码
+  keyframes: 关键帧
+  container: 容器
+  size: 文件大小
+  bit_rate: 码率
+  no_audio: 无音轨
+  loading: 正在导入…
+  degraded_keyframes: 关键帧不可用 · 该素材无法无损导出
+  engine: 媒体引擎
+  engine_missing: 未找到 FFmpeg
+  engine_missing_hint: 请安装 FFmpeg 并确保 ffmpeg 与 ffprobe 位于 PATH，或在设置中指定路径。
+  engine_ready: FFmpeg 已就绪
+  encoders: 编码器
+  encoder_missing: 不支持
+  fps: fps
+  channels_mono: 单声道
+  channels_stereo: 立体声
+  channels_format: "{n} 声道"
+  audio_unavailable: 音频不可用
+
+edit:
+  split: 分割片段
+  move: 移动片段
+  trim: 裁剪片段
+  delete: 删除片段
+  merge: 合并片段
+  select_first: 请先选择一个片段
+  no_neighbour: 没有可合并的相邻片段
+  nothing_to_undo: 没有可撤销的操作
+  nothing_to_redo: 没有可重做的操作
+  split_hint: 在播放头处分割所选片段（S）
+  merge_hint: 与相邻片段合并（M）
+
+export:
+  title: 导出
+  output: 输出文件
+  container: 容器
+  no_output: 尚未选择输出文件
+  browse: 浏览…
+  mode: 模式
+  mode_lossless: 无损（流复制）
+  mode_lossless_hint: 音视频数据原样复制，容器与编码与源文件完全一致。
+  mode_precise: 精确（重新编码）
+  mode_precise_hint: 重新编码整条时间线，剪切点精确落在你放置的位置，空隙填充为黑帧与静音。代价是画质损失和耗时。
+  precise_summary: 输出
+  segments: 片段数
+  gaps_filled: 时间线中的空白区域将用黑帧和静音填充。
+  switch_precise: 改用精确导出
+  cut_points: 实际剪切点
+  real_in: 入点
+  real_out: 出点
+  real_duration: 时长
+  drift_warning: 剪切点已吸附到关键帧
+  drift_in: 入点
+  drift_out: 出点
+  cannot_export: 无法导出
+  no_selection: 请先选择一个要导出的片段
+  start: 开始导出
+  close: 关闭
+  hide: 隐藏
+  cancel: 取消
+  cancelling: 正在取消…
+  exporting: 正在导出…
+  failed: 导出失败
+  details: FFmpeg 输出
+  blocker:
+    keyframes: 该片段的关键帧不可用，无法确定无损剪切点。请改用精确导出。
+    empty_range: 吸附到关键帧后范围为空。
+    output_is_input: 输出路径与输入文件相同，请选择其他位置。
+    engine_missing: FFmpeg 不可用。
+    missing_source: 片段引用的文件已不在项目中。
+    nothing: 时间线上没有任何素材。
+    gaps: 时间线存在空隙，无损流复制无法表示，请改用精确导出或先闭合空隙。
+    incompatible: 所选片段无法在不重新编码的情况下拼接。
+    container: 目标容器无法容纳所选编码。
+    range_empty: 所选范围内没有视频。
+  field:
+    video_codec: 视频编码
+    profile: profile
+    width: 宽度
+    height: 高度
+    pix_fmt: 像素格式
+    frame_rate: 帧率
+    sar: 像素宽高比
+    audio_codec: 音频编码
+    sample_rate: 采样率
+    channels: 声道数
+    other: 参数
+  codec:
+    h264: H.264
+    h265: H.265
+    vp9: VP9
+
+quality:
+  label: 预览
+  quarter: 四分之一分辨率
+  third: 三分之一分辨率
+  half: 二分之一分辨率
+  full: 完整分辨率

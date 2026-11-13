@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 剪刀：手柄略微不对称，像随手画出来的 -->
+  <circle cx="6.3" cy="17.9" r="2.5"/>
+  <circle cx="17.7" cy="17.9" r="2.5"/>
+  <path d="M8.2 16.1 L19.1 4.6"/>
+  <path d="M15.8 16.1 L4.9 4.6"/>
+  <circle cx="12" cy="10.3" r="1" fill="currentColor" stroke="none"/>
+</svg>

@@ -1,0 +1,184 @@
+app:
+  name: ClipForge
+  tagline: Drag a video in. Cut it losslessly.
+
+toolbar:
+  import: Import video
+  export: Export
+  undo: Undo
+  redo: Redo
+  settings: Settings
+  about: About
+  split: Split
+  delete: Delete
+  merge: Merge
+
+
+preview:
+  loading: Loading frame…
+  loading_hint: Decoding the first frame
+  empty: No video loaded
+  hint: Drop a video here, or click “Import video”.
+
+timeline:
+  title: Timeline
+  empty: Timeline is empty
+  zoom: Zoom
+  fit: Fit
+  fit_hint: Fit the whole project (double-click the tracks)
+  zoom_in: Zoom in
+  zoom_out: Zoom out
+
+settings:
+  title: Settings
+  appearance: Appearance
+  theme: Theme
+  language: Language
+  close: Close
+  saved: Settings saved
+
+theme:
+  light: Light
+  dark: Dark
+  system: Follow system
+
+language:
+  en: English
+  zh: 简体中文
+
+about:
+  title: About ClipForge
+  version: Version
+  license: License
+  license_value: GPL-3.0-or-later
+  ffmpeg: Media engine
+  ffmpeg_value: FFmpeg (GPL build, distributed separately)
+  font: Interface font
+  description: A lossless video cutter built in Rust with egui.
+  close: Close
+
+drop:
+  title: Drop to import
+  subtitle: MP4 / MKV / MOV / WebM
+
+status:
+  ready: Ready
+  importing: Importing
+  imported: Imported
+  import_failed: Import failed
+  engine_missing: FFmpeg is not available — cannot import video
+  edit_failed: Edit failed
+  undone: Undone
+  redone: Redone
+  exported: Export finished
+  export_failed: Export failed
+  export_cancelled: Export cancelled
+
+media:
+  sources: Media
+  no_sources: No media imported
+  metadata: Clip details
+  select_hint: Select a clip to see its details
+  duration: Duration
+  resolution: Resolution
+  frame_rate: Frame rate
+  video_codec: Video codec
+  audio_codec: Audio codec
+  keyframes: Keyframes
+  container: Container
+  size: File size
+  bit_rate: Bit rate
+  no_audio: No audio track
+  loading: Importing…
+  degraded_keyframes: Keyframes unavailable — lossless export is disabled for this clip
+  engine: Media engine
+  engine_missing: FFmpeg was not found
+  engine_missing_hint: Install FFmpeg and make sure ffmpeg and ffprobe are on PATH, or set the path in Settings.
+  engine_ready: FFmpeg ready
+  encoders: Encoders
+  encoder_missing: Not available
+  fps: fps
+  channels_mono: mono
+  channels_stereo: stereo
+  channels_format: "{n} ch"
+  audio_unavailable: Audio unavailable
+
+edit:
+  split: Split clip
+  move: Move clip
+  trim: Trim clip
+  delete: Delete clip
+  merge: Merge clips
+  select_first: Select a clip first
+  no_neighbour: No adjacent clip to merge with
+  nothing_to_undo: Nothing to undo
+  nothing_to_redo: Nothing to redo
+  split_hint: Split the selected clip at the playhead (S)
+  merge_hint: Merge with the neighbouring clip (M)
+
+export:
+  title: Export
+  output: Output file
+  container: Container
+  no_output: No output file chosen
+  browse: Browse…
+  mode: Mode
+  mode_lossless: Lossless (stream copy)
+  mode_lossless_hint: Audio and video are copied byte-for-byte; the container and codecs stay identical to the source.
+  mode_precise: Precise (re-encode)
+  mode_precise_hint: The timeline is re-encoded so cuts land exactly where you placed them and gaps become black plus silence. This costs quality and time.
+  precise_summary: Output
+  segments: Segments
+  gaps_filled: Empty timeline areas will be filled with black frames and silence.
+  switch_precise: Switch to precise export
+  cut_points: Real cut points
+  real_in: In point
+  real_out: Out point
+  real_duration: Duration
+  drift_warning: Cut points snapped to keyframes
+  drift_in: in
+  drift_out: out
+  cannot_export: Cannot export
+  no_selection: Select a clip to export
+  start: Start export
+  close: Close
+  hide: Hide
+  cancel: Cancel
+  cancelling: Cancelling…
+  exporting: Exporting…
+  failed: Export failed
+  details: FFmpeg output
+  blocker:
+    keyframes: Keyframes for this clip are unavailable, so a lossless cut point cannot be chosen. Use a precise export instead.
+    empty_range: The selected range is empty after snapping to keyframes.
+    output_is_input: The output path is the same as an input file. Choose a different destination.
+    engine_missing: FFmpeg is not available.
+    missing_source: The clip refers to a file that is no longer loaded.
+    nothing: Nothing is placed on the timeline.
+    gaps: The timeline contains gaps. A lossless stream copy cannot represent them; use precise export or close the gaps.
+    incompatible: The selected clips cannot be concatenated without re-encoding.
+    container: The chosen container cannot hold the selected codecs.
+    range_empty: The selected range does not contain any video.
+  field:
+    video_codec: video codec
+    profile: profile
+    width: width
+    height: height
+    pix_fmt: pixel format
+    frame_rate: frame rate
+    sar: sample aspect ratio
+    audio_codec: audio codec
+    sample_rate: sample rate
+    channels: channels
+    other: parameter
+  codec:
+    h264: H.264
+    h265: H.265
+    vp9: VP9
+
+quality:
+  label: Preview
+  quarter: Quarter resolution
+  third: One third resolution
+  half: Half resolution
+  full: Full resolution

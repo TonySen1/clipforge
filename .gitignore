@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+*.pdb
+.DS_Store
+Thumbs.db
+
+# Build artefacts assembled by `cargo xtask package`
+/dist

@@ -1,0 +1,433 @@
+//! Source list and metadata inspector.
+//!
+//! Shows what the import pipeline learned about each file. The panel never
+//! touches the filesystem: everything it renders comes from `MediaSource`.
+
+use crate::i18n::tr;
+use crate::theme::{Metrics, Palette};
+use cf_core::domain::MediaSource;
+use cf_core::time::Time;
+use egui::{RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui};
+
+/// Draws the source list. Returns the index the user clicked, if any.
+pub fn source_list(
+    ui: &mut Ui,
+    p: &Palette,
+    sources: &[MediaSource],
+    selected: Option<usize>,
+    pending: &[String],
+) -> Option<usize> {
+    let mut clicked = None;
+
+    ScrollArea::vertical()
+        .id_salt("clipforge_sources")
+        .max_height(220.0)
+        .show(ui, |ui| {
+            if sources.is_empty() && pending.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(tr("media.no_sources"))
+                        .size(12.0)
+                        .color(p.text_muted),
+                );
+                return;
+            }
+
+            for (index, source) in sources.iter().enumerate() {
+                if source_row(ui, p, source, selected == Some(index)) {
+                    clicked = Some(index);
+                }
+            }
+
+            for name in pending {
+                pending_row(ui, p, name);
+            }
+        });
+
+    clicked
+}
+
+fn source_row(ui: &mut Ui, p: &Palette, source: &MediaSource, selected: bool) -> bool {
+    let width = ui.available_width();
+    let height = 46.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
+
+    let bg = if selected {
+        p.accent_soft
+    } else if response.hovered() {
+        p.bg_hover
+    } else {
+        p.bg_sunken
+    };
+    let border = if selected { p.accent } else { p.divider };
+
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        Metrics::RADIUS_SM_C,
+        bg,
+        Stroke::new(1.0, border),
+        StrokeKind::Inside,
+    );
+
+    // Accent rail marks the selected row.
+    if selected {
+        painter.rect_filled(
+            egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+            Metrics::RADIUS_XS_C,
+            p.accent,
+        );
+    }
+
+    let text_left = rect.left() + 12.0;
+    painter.text(
+        egui::pos2(text_left, rect.top() + 11.0),
+        egui::Align2::LEFT_TOP,
+        ellipsize(&source.display_name(), 28),
+        egui::FontId::proportional(12.5),
+        if selected { p.accent } else { p.text_primary },
+    );
+
+    let (w, h) = source.info.display_size();
+    let subtitle = format!(
+        "{} · {}×{} · {} fps",
+        source.duration,
+        w,
+        h,
+        trim_fps(source.info.video.frame_rate.fps())
+    );
+    painter.text(
+        egui::pos2(text_left, rect.top() + 27.0),
+        egui::Align2::LEFT_TOP,
+        subtitle,
+        egui::FontId::proportional(11.0),
+        p.text_muted,
+    );
+
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+}
+
+fn pending_row(ui: &mut Ui, p: &Palette, name: &str) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 40.0), Sense::hover());
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        Metrics::RADIUS_SM_C,
+        p.bg_sunken,
+        Stroke::new(1.0, p.divider),
+        StrokeKind::Inside,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 12.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format!("{} · {}", ellipsize(name, 30), tr("media.loading")),
+        egui::FontId::proportional(11.5),
+        p.text_muted,
+    );
+}
+
+/// Draws the metadata inspector for the selected source.
+pub fn metadata(ui: &mut Ui, p: &Palette, source: Option<&MediaSource>) {
+    let Some(source) = source else {
+        ui.label(
+            RichText::new(tr("media.select_hint"))
+                .size(12.0)
+                .color(p.text_muted),
+        );
+        return;
+    };
+
+    let info = &source.info;
+
+    row(ui, p, &tr("media.duration"), &source.duration.to_string());
+
+    let (w, h) = info.display_size();
+    let resolution = if info.video.rotation != 0 {
+        format!("{w}×{h}  ({}°)", info.video.rotation)
+    } else {
+        format!("{w}×{h}")
+    };
+    row(ui, p, &tr("media.resolution"), &resolution);
+
+    row(
+        ui,
+        p,
+        &tr("media.frame_rate"),
+        &format!(
+            "{} {}",
+            trim_fps(info.video.frame_rate.fps()),
+            tr("media.fps")
+        ),
+    );
+
+    row(ui, p, &tr("media.video_codec"), &video_codec(info));
+
+    let audio = match &info.audio {
+        Some(audio) => {
+            let channels = channel_label(audio.channels, audio.channel_layout.as_deref());
+            // `bit_rate` is per stream; the container figure below covers total.
+            let bitrate = audio
+                .bit_rate
+                .map(|rate| format!(" · {}", fmt_rate(rate)))
+                .unwrap_or_default();
+            format!(
+                "{} · {} · {}{}",
+                audio.codec,
+                channels,
+                fmt_hz(audio.sample_rate),
+                bitrate
+            )
+        }
+        None => tr("media.no_audio").to_string(),
+    };
+    row(ui, p, &tr("media.audio_codec"), &audio);
+
+    row(ui, p, &tr("media.container"), &info.container.format_name);
+
+    if let Some(bit_rate) = info.container.bit_rate {
+        row(
+            ui,
+            p,
+            &tr("media.bit_rate"),
+            &format!("{}/s", fmt_rate(bit_rate)),
+        );
+    }
+
+    if let Some(size) = info.container.size {
+        row(ui, p, &tr("media.size"), &fmt_bytes(size));
+    }
+
+    let keyframes = if source.keyframes.is_degraded() {
+        tr("media.degraded_keyframes").to_string()
+    } else {
+        source.keyframes.len().to_string()
+    };
+    row(ui, p, &tr("media.keyframes"), &keyframes);
+
+    if source.keyframes.is_degraded() {
+        ui.add_space(6.0);
+        egui::Frame::new()
+            .fill(p.accent_soft)
+            .stroke(Stroke::new(1.0, p.warning))
+            .corner_radius(Metrics::RADIUS_XS_C)
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(tr("media.degraded_keyframes"))
+                        .size(11.0)
+                        .color(p.warning),
+                );
+            });
+    }
+}
+
+fn row(ui: &mut Ui, p: &Palette, label: &str, value: &str) {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [92.0, 18.0],
+            egui::Label::new(RichText::new(label).size(11.5).color(p.text_muted)),
+        );
+        ui.label(RichText::new(value).size(11.5).color(p.text_secondary));
+    });
+    ui.add_space(1.0);
+}
+
+fn video_codec(info: &cf_core::media::MediaInfo) -> String {
+    let mut text = info.video.codec.clone();
+    if let Some(profile) = &info.video.profile {
+        text.push_str(" · ");
+        text.push_str(profile);
+    }
+    if let Some(pix_fmt) = &info.video.pix_fmt {
+        text.push_str(" · ");
+        text.push_str(pix_fmt);
+    }
+    text
+}
+
+fn channel_label(channels: u32, layout: Option<&str>) -> String {
+    match channels {
+        1 => tr("media.channels_mono").to_string(),
+        2 => tr("media.channels_stereo").to_string(),
+        n => layout
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("{n} ch")),
+    }
+}
+
+/// `29.97` rather than `29.970029`, and `30` rather than `30.000`.
+fn trim_fps(fps: f64) -> String {
+    if (fps - fps.round()).abs() < 0.001 {
+        format!("{}", fps.round() as i64)
+    } else {
+        format!("{fps:.3}")
+    }
+}
+
+fn fmt_hz(hz: u32) -> String {
+    if hz >= 1000 {
+        format!("{:.1} kHz", hz as f64 / 1000.0)
+    } else {
+        format!("{hz} Hz")
+    }
+}
+
+fn fmt_rate(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{:.1} Mb/s", value as f64 / 1_000_000.0)
+    } else if value >= 1_000 {
+        format!("{:.0} kb/s", value as f64 / 1_000.0)
+    } else {
+        format!("{value} b/s")
+    }
+}
+
+fn fmt_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// Truncates in the middle, always keeping the full extension.
+///
+/// Keeping the extension whole matters because it is how the user tells an
+/// `.mp4` from an `.mkv` in the source list.
+fn ellipsize(text: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_chars {
+        return text.to_owned();
+    }
+
+    // A suffix longer than 6 chars is treated as part of the name, not an
+    // extension (e.g. "recording.2026-11-13-session").
+    let ext: &str = match text.rfind('.') {
+        Some(dot) if text.len() - dot <= 6 && dot > 0 => &text[dot..],
+        _ => "",
+    };
+
+    let ext_chars = ext.chars().count();
+    let budget = max_chars.saturating_sub(ext_chars + 1); // +1 for the ellipsis
+    if budget == 0 {
+        return format!("…{ext}");
+    }
+
+    let head: String = chars[..budget].iter().collect();
+    format!("{head}…{ext}")
+}
+
+/// The "no FFmpeg" card. Shown instead of the import hint when the engine is
+/// missing, because nothing else can work.
+pub fn engine_missing_card(ui: &mut Ui, p: &Palette, detail: Option<&str>) {
+    egui::Frame::new()
+        .fill(p.bg_elevated)
+        .stroke(Stroke::new(1.0, p.warning))
+        .corner_radius(Metrics::RADIUS_MD_C)
+        .inner_margin(egui::Margin::same(16))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(tr("media.engine_missing"))
+                    .size(14.0)
+                    .strong()
+                    .color(p.warning),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(tr("media.engine_missing_hint"))
+                    .size(12.0)
+                    .color(p.text_secondary),
+            );
+            if let Some(detail) = detail {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(detail)
+                        .size(10.5)
+                        .monospace()
+                        .color(p.text_muted),
+                );
+            }
+        });
+}
+
+/// Formats a time for the transport bar; kept next to the panel so both use
+/// the same precision.
+pub fn timecode(t: Time) -> String {
+    t.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trims_whole_frame_rates() {
+        assert_eq!(trim_fps(30.0), "30");
+        assert_eq!(trim_fps(60.0), "60");
+    }
+
+    #[test]
+    fn keeps_ntsc_precision() {
+        assert_eq!(trim_fps(29.970_029), "29.970");
+        assert_eq!(trim_fps(23.976_024), "23.976");
+    }
+
+    #[test]
+    fn formats_file_sizes() {
+        assert_eq!(fmt_bytes(512), "512 B");
+        assert_eq!(fmt_bytes(1536), "1.5 KB");
+        assert_eq!(fmt_bytes(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[test]
+    fn formats_sample_rates() {
+        assert_eq!(fmt_hz(44_100), "44.1 kHz");
+        assert_eq!(fmt_hz(48_000), "48.0 kHz");
+        assert_eq!(fmt_hz(800), "800 Hz");
+    }
+
+    #[test]
+    fn formats_bit_rates() {
+        assert_eq!(fmt_rate(900), "900 b/s");
+        assert_eq!(fmt_rate(128_000), "128 kb/s");
+        assert_eq!(fmt_rate(3_369_540), "3.4 Mb/s");
+    }
+
+    #[test]
+    fn ellipsize_keeps_the_whole_extension() {
+        let name = "a-very-long-file-name-that-goes-on-and-on-forever.mkv";
+        let short = ellipsize(name, 20);
+        assert_eq!(short.chars().count(), 20);
+        assert!(short.ends_with(".mkv"), "got {short}");
+        assert!(short.starts_with("a-very-long-fil…"));
+    }
+
+    #[test]
+    fn ellipsize_leaves_short_names_alone() {
+        assert_eq!(ellipsize("clip.mp4", 30), "clip.mp4");
+    }
+
+    #[test]
+    fn ellipsize_handles_names_without_extension() {
+        let short = ellipsize("a-very-long-name-without-any-dot-at-all", 16);
+        assert_eq!(short.chars().count(), 16);
+        assert!(short.ends_with('…'));
+    }
+
+    #[test]
+    fn ellipsize_does_not_mistake_long_suffix_for_an_extension() {
+        // After the last dot there are more than 6 chars, so it is part of the name.
+        let short = ellipsize("recording.2026-11-13-session", 14);
+        assert!(!short.ends_with("-session"), "got {short}");
+    }
+}

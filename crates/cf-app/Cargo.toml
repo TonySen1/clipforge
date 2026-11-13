@@ -1,0 +1,23 @@
+[package]
+name = "cf-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "clipforge"
+path = "src/main.rs"
+
+[dependencies]
+cf-core = { path = "../cf-core" }
+cf-ui = { path = "../cf-ui" }
+eframe = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+dark-light = { workspace = true }
+rfd = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+log = { workspace = true }
+env_logger = { workspace = true }
+cpal = "0.18"

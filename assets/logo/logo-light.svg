@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <!-- Backdrop so the mark reads on white surfaces (about dialog, light toolbar). -->
+    <linearGradient id="tile" x1="40" y1="32" x2="478" y2="490" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E8F0FB"/>
+      <stop offset="0.55" stop-color="#CFE0F4"/>
+      <stop offset="1" stop-color="#B4CBE8"/>
+    </linearGradient>
+    <radialGradient id="tileSheen" cx="0.28" cy="0.18" r="0.85">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="back" x1="120" y1="140" x2="402" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9FB9D8"/>
+      <stop offset="1" stop-color="#7B99BF"/>
+    </linearGradient>
+    <linearGradient id="mid" x1="150" y1="150" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D8E6F7"/>
+      <stop offset="1" stop-color="#AFC8E4"/>
+    </linearGradient>
+    <linearGradient id="front" x1="170" y1="160" x2="360" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.52" stop-color="#EAF3FE"/>
+      <stop offset="1" stop-color="#CFE0F4"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="186" y1="166" x2="336" y2="338" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="148" y1="400" x2="392" y2="138" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0284C7"/>
+      <stop offset="0.45" stop-color="#1F6FEB"/>
+      <stop offset="1" stop-color="#6D28D9"/>
+    </linearGradient>
+    <clipPath id="frontClip">
+      <rect x="158" y="158" width="224" height="224" rx="42"/>
+    </clipPath>
+    <mask id="cutMask">
+      <rect width="512" height="512" fill="#FFFFFF"/>
+      <g transform="rotate(-45 270 270)">
+        <rect x="-90" y="250" width="700" height="22" fill="#000000"/>
+      </g>
+    </mask>
+  </defs>
+
+  <!-- tile -->
+  <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+  <rect width="512" height="512" rx="112" fill="url(#tileSheen)"/>
+  <rect x="1" y="1" width="510" height="510" rx="111" fill="none" stroke="#8FACCD" stroke-width="2"/>
+
+  <!-- depth shadow -->
+  <rect x="140" y="178" width="262" height="236" rx="48" transform="rotate(-9 270 296)" fill="#1B2B45" opacity="0.22"/>
+
+  <!-- back film plate -->
+  <g transform="rotate(-9 270 270)">
+    <rect x="122" y="154" width="276" height="252" rx="50" fill="url(#back)" stroke="#6E8DB4" stroke-width="2"/>
+    <g fill="#5C7CA6" opacity="0.85">
+      <rect x="144" y="182" width="24" height="19" rx="6"/>
+      <rect x="144" y="234" width="24" height="19" rx="6"/>
+      <rect x="144" y="286" width="24" height="19" rx="6"/>
+      <rect x="144" y="338" width="24" height="19" rx="6"/>
+      <rect x="352" y="182" width="24" height="19" rx="6"/>
+      <rect x="352" y="234" width="24" height="19" rx="6"/>
+      <rect x="352" y="286" width="24" height="19" rx="6"/>
+      <rect x="352" y="338" width="24" height="19" rx="6"/>
+    </g>
+    <path d="M150 170 H370" stroke="#FFFFFF" stroke-opacity="0.7" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <!-- mid plate -->
+  <g transform="rotate(-3 270 270)">
+    <rect x="134" y="142" width="272" height="246" rx="48" fill="url(#mid)" stroke="#7E9CC0" stroke-width="2"/>
+    <g fill="#7E9CC0" opacity="0.85">
+      <rect x="152" y="176" width="22" height="18" rx="5"/>
+      <rect x="152" y="228" width="22" height="18" rx="5"/>
+      <rect x="152" y="280" width="22" height="18" rx="5"/>
+      <rect x="152" y="332" width="22" height="18" rx="5"/>
+      <rect x="366" y="176" width="22" height="18" rx="5"/>
+      <rect x="366" y="228" width="22" height="18" rx="5"/>
+      <rect x="366" y="280" width="22" height="18" rx="5"/>
+      <rect x="366" y="332" width="22" height="18" rx="5"/>
+    </g>
+    <path d="M158 158 H382" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <!-- front plate, cut by the beam's gap -->
+  <g clip-path="url(#frontClip)" mask="url(#cutMask)">
+    <rect x="158" y="158" width="224" height="224" rx="42" fill="url(#front)" stroke="#3F71B0" stroke-width="2.5"/>
+    <rect x="158" y="158" width="224" height="224" rx="42" fill="url(#sheen)" opacity="0.85"/>
+    <rect x="171" y="171" width="198" height="198" rx="33" fill="none" stroke="#5C7CA6" stroke-width="9" opacity="0.14"/>
+    <path d="M186 186 C 214 168, 258 168, 292 178" stroke="#FFFFFF" stroke-opacity="0.95" stroke-width="3" stroke-linecap="round"/>
+    <g fill="#6E8DB4" opacity="0.55">
+      <rect x="192" y="174" width="24" height="11" rx="4"/>
+      <rect x="232" y="171" width="24" height="11" rx="4"/>
+      <rect x="272" y="171" width="24" height="11" rx="4"/>
+      <rect x="312" y="174" width="24" height="11" rx="4"/>
+      <rect x="192" y="355" width="24" height="11" rx="4"/>
+      <rect x="232" y="358" width="24" height="11" rx="4"/>
+      <rect x="272" y="358" width="24" height="11" rx="4"/>
+      <rect x="312" y="355" width="24" height="11" rx="4"/>
+    </g>
+  </g>
+
+  <!-- cutting beam -->
+  <g stroke-linecap="round">
+    <line x1="148" y1="400" x2="392" y2="138" stroke="url(#beam)" stroke-width="38" opacity="0.10"/>
+    <line x1="148" y1="400" x2="392" y2="138" stroke="url(#beam)" stroke-width="18" opacity="0.18"/>
+    <line x1="148" y1="400" x2="392" y2="138" stroke="url(#beam)" stroke-width="8"/>
+    <line x1="148" y1="400" x2="392" y2="138" stroke="#FFFFFF" stroke-width="2.4" opacity="0.85"/>
+  </g>
+  <circle cx="392" cy="138" r="13" fill="#1F6FEB" opacity="0.16"/>
+  <circle cx="392" cy="138" r="4.5" fill="#FFFFFF"/>
+</svg>

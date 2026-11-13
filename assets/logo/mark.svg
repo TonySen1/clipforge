@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="40" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1A2C48"/>
+      <stop offset="1" stop-color="#080C14"/>
+    </linearGradient>
+    <linearGradient id="plate" x1="150" y1="150" x2="380" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3D638F"/>
+      <stop offset="1" stop-color="#172B44"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="160" y1="380" x2="380" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#63E6FF"/>
+      <stop offset="0.5" stop-color="#4F9CFF"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <clipPath id="plateClip">
+      <rect x="150" y="150" width="230" height="230" rx="46"/>
+    </clipPath>
+    <mask id="cut">
+      <rect width="512" height="512" fill="#FFFFFF"/>
+      <g transform="rotate(-45 265 265)">
+        <rect x="-100" y="246" width="730" height="28" fill="#000000"/>
+      </g>
+    </mask>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="112" y="136" width="270" height="254" rx="52" transform="rotate(-9 247 263)" fill="#0A111B" opacity="0.75"/>
+  <rect x="126" y="138" width="268" height="250" rx="50" transform="rotate(-4 260 263)" fill="#203552" stroke="#3C5D87" stroke-width="4"/>
+
+  <g clip-path="url(#plateClip)" mask="url(#cut)">
+    <rect x="150" y="150" width="230" height="230" rx="46" fill="url(#plate)" stroke="#74A9E2" stroke-width="4"/>
+  </g>
+
+  <line x1="158" y1="382" x2="388" y2="142" stroke="url(#beam)" stroke-width="26" opacity="0.18"/>
+  <line x1="158" y1="382" x2="388" y2="142" stroke="url(#beam)" stroke-width="12"/>
+  <line x1="158" y1="382" x2="388" y2="142" stroke="#EDFBFF" stroke-width="4"/>
+  <circle cx="388" cy="142" r="7" fill="#EDFBFF"/>
+</svg>

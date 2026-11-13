@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <!-- Transparent-background mark for toolbars: reads on both light and dark. -->
+  <defs>
+    <linearGradient id="plate" x1="150" y1="150" x2="380" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5C87B8"/>
+      <stop offset="1" stop-color="#2B4466"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="150" y1="392" x2="390" y2="132" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5CE1FF"/>
+      <stop offset="0.5" stop-color="#4F9CFF"/>
+      <stop offset="1" stop-color="#B49BFF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- transparent margin keeps the glyph optically centered at small sizes -->
+  <rect x="150" y="150" width="212" height="212" rx="44" fill="url(#plate)" stroke="#A8C9EE" stroke-width="10"/>
+  <rect x="150" y="150" width="212" height="212" rx="44" fill="none" stroke="#000000" stroke-opacity="0.18" stroke-width="2"/>
+  <g fill="#DCEBFF" opacity="0.75">
+    <rect x="178" y="176" width="30" height="14" rx="6"/>
+    <rect x="226" y="176" width="30" height="14" rx="6"/>
+    <rect x="274" y="176" width="30" height="14" rx="6"/>
+    <rect x="322" y="176" width="30" height="14" rx="6"/>
+    <rect x="178" y="322" width="30" height="14" rx="6"/>
+    <rect x="226" y="322" width="30" height="14" rx="6"/>
+    <rect x="274" y="322" width="30" height="14" rx="6"/>
+    <rect x="322" y="322" width="30" height="14" rx="6"/>
+  </g>
+
+  <line x1="150" y1="392" x2="390" y2="132" stroke="url(#beam)" stroke-width="26" opacity="0.22" stroke-linecap="round"/>
+  <line x1="150" y1="392" x2="390" y2="132" stroke="url(#beam)" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="390" cy="132" r="6" fill="#FFFFFF"/>
+</svg>

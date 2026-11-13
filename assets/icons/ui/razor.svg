@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 剃刀工具：直角刀片 + 短柄，指向左下方 -->
+  <path d="M10.4 13.6 L19.0 5.0 L21.0 7.0 L12.4 15.6 Z"/>
+  <path d="M10.4 13.6 L12.4 15.6"/>
+  <path d="M3.0 21.0 L9.2 14.8"/>
+  <path d="M20.0 6.0 L21.0 7.0"/>
+</svg>

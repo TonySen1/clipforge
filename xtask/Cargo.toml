@@ -1,0 +1,14 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "1"
+resvg = "0.50"
+usvg = "0.50"
+tiny-skia = "0.12"
+image = { version = "0.25", default-features = false, features = ["png"] }
+ico = "0.6"

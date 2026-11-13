@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="40" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#24405F"/>
+      <stop offset="1" stop-color="#0E1522"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(256 238) rotate(90) scale(220)">
+      <stop offset="0" stop-color="#3E7DC4" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#3E7DC4" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="back" x1="120" y1="140" x2="402" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2E4A6B"/>
+      <stop offset="1" stop-color="#16202F"/>
+    </linearGradient>
+    <linearGradient id="mid" x1="150" y1="150" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3E5C80"/>
+      <stop offset="1" stop-color="#1E2C3F"/>
+    </linearGradient>
+    <linearGradient id="front" x1="170" y1="160" x2="360" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5C87B8"/>
+      <stop offset="0.52" stop-color="#42678F"/>
+      <stop offset="1" stop-color="#2A4160"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="186" y1="166" x2="336" y2="338" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="148" y1="400" x2="392" y2="138" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#63E6FF"/>
+      <stop offset="0.45" stop-color="#4F9CFF"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <clipPath id="frontClip">
+      <rect x="132" y="136" width="272" height="272" rx="48"/>
+    </clipPath>
+    <mask id="cutMask">
+      <rect width="512" height="512" fill="#FFFFFF"/>
+      <g transform="rotate(-45 270 270)">
+        <rect x="-90" y="250" width="700" height="22" fill="#000000"/>
+      </g>
+    </mask>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#halo)"/>
+  <rect x="10" y="10" width="492" height="492" rx="104" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="2"/>
+
+    <rect x="140" y="178" width="262" height="236" rx="48" transform="rotate(-9 270 296)" fill="#000000" opacity="0.28"/>
+
+    <g transform="rotate(-9 270 270)">
+      <rect x="96" y="132" width="330" height="300" rx="56" fill="url(#back)" stroke="#4A6C95" stroke-width="3"/>
+      <g fill="#0D1826" opacity="0.85">
+        <rect x="144" y="182" width="24" height="19" rx="6"/>
+        <rect x="144" y="234" width="24" height="19" rx="6"/>
+        <rect x="144" y="286" width="24" height="19" rx="6"/>
+        <rect x="144" y="338" width="24" height="19" rx="6"/>
+        <rect x="352" y="182" width="24" height="19" rx="6"/>
+        <rect x="352" y="234" width="24" height="19" rx="6"/>
+        <rect x="352" y="286" width="24" height="19" rx="6"/>
+        <rect x="352" y="338" width="24" height="19" rx="6"/>
+      </g>
+      <path d="M150 170 H370" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="2" stroke-linecap="round"/>
+    </g>
+
+    <g transform="rotate(-3 270 270)">
+      <rect x="108" y="122" width="322" height="292" rx="54" fill="url(#mid)" stroke="#5E85B3" stroke-width="3"/>
+      <g fill="#101C2B" opacity="0.88">
+        <rect x="152" y="176" width="22" height="18" rx="5"/>
+        <rect x="152" y="228" width="22" height="18" rx="5"/>
+        <rect x="152" y="280" width="22" height="18" rx="5"/>
+        <rect x="152" y="332" width="22" height="18" rx="5"/>
+        <rect x="366" y="176" width="22" height="18" rx="5"/>
+        <rect x="366" y="228" width="22" height="18" rx="5"/>
+        <rect x="366" y="280" width="22" height="18" rx="5"/>
+        <rect x="366" y="332" width="22" height="18" rx="5"/>
+      </g>
+      <path d="M158 158 H382" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="2" stroke-linecap="round"/>
+    </g>
+
+    <g clip-path="url(#frontClip)" mask="url(#cutMask)">
+      <rect x="132" y="136" width="272" height="272" rx="48" fill="url(#front)" stroke="#9CC4EE" stroke-width="3"/>
+      <rect x="132" y="136" width="272" height="272" rx="48" fill="url(#sheen)" opacity="0.7"/>
+      <rect x="147" y="151" width="242" height="242" rx="38" fill="none" stroke="#08111E" stroke-width="9" opacity="0.24"/>
+      <path d="M186 186 C 214 168, 258 168, 292 178" stroke="#FFFFFF" stroke-opacity="0.32" stroke-width="3" stroke-linecap="round"/>
+      <g fill="#0E1A28" opacity="0.7">
+        <rect x="192" y="174" width="24" height="11" rx="4"/>
+        <rect x="232" y="171" width="24" height="11" rx="4"/>
+        <rect x="272" y="171" width="24" height="11" rx="4"/>
+        <rect x="312" y="174" width="24" height="11" rx="4"/>
+        <rect x="192" y="355" width="24" height="11" rx="4"/>
+        <rect x="232" y="358" width="24" height="11" rx="4"/>
+        <rect x="272" y="358" width="24" height="11" rx="4"/>
+        <rect x="312" y="355" width="24" height="11" rx="4"/>
+      </g>
+    </g>
+
+    <g stroke-linecap="round">
+      <line x1="148" y1="400" x2="392" y2="138" stroke="url(#beam)" stroke-width="38" opacity="0.08"/>
+      <line x1="148" y1="400" x2="392" y2="138" stroke="url(#beam)" stroke-width="18" opacity="0.17"/>
+      <line x1="148" y1="400" x2="392" y2="138" stroke="url(#beam)" stroke-width="8"/>
+      <line x1="148" y1="400" x2="392" y2="138" stroke="#FFFFFF" stroke-width="4" opacity="1"/>
+    </g>
+    <circle cx="392" cy="138" r="13" fill="#63E6FF" opacity="0.18"/>
+    <circle cx="392" cy="138" r="4.5" fill="#EDFBFF"/>
+</svg>

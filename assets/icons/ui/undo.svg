@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 撤销：回卷箭头 -->
+  <path d="M8.2 7.3 L4.1 11.4 L8.2 15.5"/>
+  <path d="M4.1 11.4 L14.6 11.4 C17.5 11.4 19.9 13.8 19.9 16.7 C19.9 19.1 18 21 15.6 21 L12.2 21"/>
+</svg>
