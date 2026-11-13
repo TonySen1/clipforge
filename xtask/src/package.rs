@@ -255,12 +255,15 @@ SectionEnd
     );
 
     if icon.is_file() {
-        // The icon line only works when the file exists; keep the script valid
-        // either way by inserting it conditionally.
+        // MUI2 owns the installer/uninstaller icons through `MUI_ICON` and
+        // `MUI_UNICON`; a bare `Icon` line is overridden by the page macros, so
+        // the installer kept the stock NSIS icon. These must be defined after
+        // `!include MUI2.nsh` and before the first page macro.
         let with_icon = script.replace(
             "!insertmacro MUI_PAGE_WELCOME",
             &format!(
-                "Icon \"{icon}\"\nUninstallIcon \"{icon}\"\n!insertmacro MUI_PAGE_WELCOME",
+                "!define MUI_ICON \"{icon}\"\n!define MUI_UNICON \"{icon}\"\n\
+                 !insertmacro MUI_PAGE_WELCOME",
                 icon = win(&icon)
             ),
         );
