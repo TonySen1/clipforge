@@ -6,24 +6,39 @@ ClipForge 本身以 **GPL-3.0-or-later** 发布。下面列出运行期与构建
 
 **决策（ADR-002）**：以 sidecar CLI 方式调用 `ffmpeg` / `ffprobe`，不链接开发库。
 
-**许可策略：GPL 构建**
+**许可策略：GPL 构建，随包分发**
 
-- 分发的是包含 libx264 / libx265 的 **GPL 版 FFmpeg**。
+- 分发包内自带一份包含 libx264 / libx265 的 **GPL 版 FFmpeg**，位于 `bin/`。
 - 因为 ClipForge 与该 GPL 二进制构成整体分发，ClipForge 自身按 GPL-3.0-or-later 开源，源码随二进制提供。
 - 精确导出默认编码器：H.264 (`libx264`, CRF 18 / preset medium) + AAC 192k；WebM 使用 VP9 + Opus，启动时探测编码器可用性。
-- 需要随包附带：
+- 随包附带的文件：
 
   ```text
-  FFmpeg 源码或获取方式（GPL 要求提供对应源码）
-  FFmpeg COPYING.GPLv3
-  本项目的 THIRD_PARTY.md 与 LICENSE
+  bin/ffmpeg.exe, bin/ffprobe.exe
+  bin/avcodec-*.dll, avfilter-*.dll, avformat-*.dll,
+      avutil-*.dll, swresample-*.dll, swscale-*.dll
   ```
 
+  `ffplay.exe` 与 `avdevice-*.dll` 不参与 ClipForge 的任何功能，未随包提供。
+
 - 二进制定位顺序（P1 实现）：用户设置路径 → 可执行文件同目录 `bin/` → 应用资源目录 → `PATH`。
+  发行包因此开箱即用；用户仍可在偏好文件里指向自己的 FFmpeg 覆盖内置版本。
 - 启动执行 `ffmpeg -version` 与 `ffmpeg -encoders` 做能力探测，缺失时给出可操作引导而不是崩溃。
-- 当前验证环境：`ffmpeg version N-125752`，`--enable-gpl --enable-version3`，含 libx264 / libx265 / libvpx-vp9 / aac / libopus。
+
+**当前打包的构建**
+
+```text
+ffmpeg version N-125752-g2f209337fc-20260724
+--enable-gpl --enable-version3 --enable-shared
+含 libx264 / libx265 / libvpx-vp9 / aac / libopus / libdav1d / libsvtav1 等
+```
+
+- 来源：[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)（win64-gpl-shared）
+- 对应源码：https://github.com/FFmpeg/FFmpeg/tree/n7.1 （构建对应 commit 见版本串 `g2f209337fc`）
+- 构建脚本：https://github.com/BtbN/FFmpeg-Builds 的 `win64-gpl-shared` 配置
 
 > 分发前必须复核：所用 FFmpeg 构建的 `--enable-gpl` 与具体库列表，并同步更新本节。
+> 若替换为其他构建，请同时更新上面的版本串与源码链接，并确认 `bin/` 内的文件清单仍然完整。
 
 ## 字体
 

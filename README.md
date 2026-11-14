@@ -51,21 +51,27 @@
 
 ### 直接使用
 
-从 [Releases](https://github.com/TonySen1/clipforge/releases) 下载：
+从 [Releases](https://github.com/TonySen1/clipforge/releases) 下载，提供两种分发：
 
-- **安装版** `ClipForge-<version>-win64-setup.exe` —— 安装到当前用户目录，开始菜单快捷方式默认创建，桌面快捷方式可选
-- **免安装版** `clipforge-<version>-x86_64-pc-windows-msvc.zip` —— 解压即用，删除目录即卸载
+| 版本 | 文件 | 说明 |
+|---|---|---|
+| **完整版**（推荐） | `ClipForge-<version>-win64-setup.exe`<br>`clipforge-<version>-x86_64-pc-windows-msvc.zip` | 内置 FFmpeg（约 150 MB），装好即用 |
+| **精简版** | `clipforge-<version>-x86_64-pc-windows-msvc-slim.zip` | 不含 FFmpeg（约 12 MB），需自备 |
 
-### 前置依赖：FFmpeg
+- 安装版安装到当前用户目录，开始菜单快捷方式默认创建，桌面快捷方式可选
+- 免安装版解压即用，删除目录即卸载
 
-需要 **FFmpeg 6.0+** 或任意较新的 git 构建，且 `ffmpeg` 与 `ffprobe` 位于同一目录。查找顺序：
+### FFmpeg
+
+**发行包已内置 FFmpeg**，位于 `bin/`（`ffmpeg.exe`、`ffprobe.exe` 及它们依赖的 DLL），
+下载后无需任何额外安装。许可与来源见 [`THIRD_PARTY.md`](THIRD_PARTY.md)。
+
+如果更想用自己的构建（**FFmpeg 6.0+** 或较新的 git 版本），查找顺序是：
 
 1. 偏好文件中的显式路径（目录或可执行文件均可）
 2. `clipforge.exe` 同级目录的 `bin/`
 3. 应用资源目录
 4. 系统 `PATH`
-
-推荐直接装到 `PATH`，或把 `ffmpeg.exe` / `ffprobe.exe` 放进取名为 `bin` 的子目录。
 
 精确导出需要 `libx264`（WebM 需要 `libvpx-vp9` 与 `libopus`）；缺失时程序会降级或明确报错。
 
@@ -170,17 +176,27 @@ cargo test -p cf-core --test export_p6_integration -- --ignored
 cargo run -p xtask -- package
 ```
 
-产物在 `dist/`：
+产物在 `dist/`，一次生成完整版与精简版：
 
 ```text
-clipforge-<version>-<target>/                 便携目录
-clipforge-<version>-<target>.zip              免安装版
-ClipForge-<version>-win64-setup.exe           安装包（需要 NSIS；缺失时跳过并提示）
+clipforge-<version>-<target>/                 完整版便携目录（含 bin/ 里的 FFmpeg）
+clipforge-<version>-<target>.zip              完整版免安装包
+ClipForge-<version>-win64-setup.exe           安装包（完整版，需要 NSIS；缺失时跳过并提示）
+clipforge-<version>-<target>-slim/            精简版便携目录（不含 FFmpeg）
+clipforge-<version>-<target>-slim.zip         精简版免安装包
 ```
+
+找不到 FFmpeg 构建时只产出精简版，并打印一条警告。
 
 安装包由 `xtask` 生成 NSIS 脚本后调用 `makensis`，安装到 `%LOCALAPPDATA%\Programs\ClipForge`，
 普通用户权限即可。安装向导里「开始菜单快捷方式」默认勾选，「桌面快捷方式」默认不勾选，
-安装完成页可选择立即启动。FFmpeg 不随包分发（GPL 原因，详见 `THIRD_PARTY.md`）。
+安装完成页可选择立即启动。
+
+完整版把 FFmpeg 复制到 `bin/`：打包脚本会从 `CLIPFORGE_FFMPEG_DIR`、`vendor/ffmpeg/bin`
+或 `C:\tools\ffmpeg\bin` 里找一份构建，只复制 `ffmpeg.exe`、`ffprobe.exe` 与所需的
+`av*.dll` / `sw*.dll`（不含 `ffplay` 与 `avdevice`）。许可与来源见 `THIRD_PARTY.md`。
+
+想换一份 FFmpeg 构建时，设置 `CLIPFORGE_FFMPEG_DIR` 指向它的 `bin` 目录再打包即可。
 
 ## 已知限制
 

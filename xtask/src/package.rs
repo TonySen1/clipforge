@@ -1,18 +1,16 @@
-//! `cargo xtask package` — assemble a portable distribution directory.
+//! `cargo xtask package` — assemble the portable and installed distributions.
 //!
-//! Produces `dist/clipforge-<version>-<target>/` containing:
+//! Two variants are produced, because bundling FFmpeg makes the download ~150 MB
+//! larger and not everyone wants that:
 //!
-//! ```text
-//! clipforge.exe
-//! fonts/HarmonyOS_Sans_SC_Regular.ttf
-//! README.txt          (how to point the app at FFmpeg)
-//! THIRD_PARTY.md
-//! LICENSE
-//! ```
+//! * **Full** — `clipforge-<ver>-<target>/` with FFmpeg in `bin/`. Works on a
+//!   clean machine.
+//! * **Slim** — `clipforge-<ver>-<target>-slim/` without FFmpeg. Needs an
+//!   existing install on `PATH`, in `bin/`, or via the preference file.
 //!
-//! FFmpeg is deliberately *not* bundled: it is GPL and distributed separately,
-//! see THIRD_PARTY.md. The app finds it on `PATH` or in `bin/` next to the exe,
-//! and `README.txt` tells the user that.
+//! Each variant ships `clipforge.exe`, `fonts/`, `README.txt`, `LICENSE` and
+//! `THIRD_PARTY.md`. The full variant adds the GPL FFmpeg build, so
+//! ClipForge itself stays GPL-3.0-or-later (see THIRD_PARTY.md).
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -20,7 +18,35 @@ use std::process::Command;
 
 use crate::{repo_root, run_cargo};
 
-/// Builds the release binary and copies it into a portable folder.
+/// Which distribution to assemble.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Variant {
+    /// Includes the FFmpeg build in `bin/`.
+    Full,
+    /// Leaves FFmpeg to the user's machine.
+    Slim,
+}
+
+impl Variant {
+    /// Suffix appended to the folder and archive names. The full build keeps
+    /// the plain name so existing links keep working.
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::Full => "",
+            Self::Slim => "-slim",
+        }
+    }
+
+    /// Human label for logs and the README.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Full => "full (FFmpeg included)",
+            Self::Slim => "slim (no FFmpeg)",
+        }
+    }
+}
+
+/// Builds the release binary once, then assembles both variants.
 pub fn package() -> Result<()> {
     let root = repo_root();
     let version = workspace_version(&root)?;
@@ -43,9 +69,52 @@ pub fn package() -> Result<()> {
         );
     }
 
+    // Locate FFmpeg once; a missing install only degrades the full variant to
+    // a slim one, with a loud warning.
+    let ffmpeg_source = find_ffmpeg_install();
+    if ffmpeg_source.is_none() {
+        println!(
+            "warning: no FFmpeg install found; only the slim variant will be built.\n\
+             Set CLIPFORGE_FFMPEG_DIR, or place a build in vendor/ffmpeg/bin."
+        );
+    }
+
+    let mut variants = vec![Variant::Slim];
+    if ffmpeg_source.is_some() {
+        variants.insert(0, Variant::Full);
+    }
+
+    for variant in variants {
+        assemble(
+            &root,
+            &built,
+            exe_name,
+            &version,
+            &target,
+            variant,
+            &ffmpeg_source,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Assembles one variant into its own folder, archive and (for the full build)
+/// installer.
+fn assemble(
+    root: &Path,
+    built: &Path,
+    exe_name: &str,
+    version: &str,
+    target: &str,
+    variant: Variant,
+    ffmpeg_source: &Option<PathBuf>,
+) -> Result<()> {
+    println!("\n=== {} ===", variant.label());
+
     let out_dir = root
         .join("dist")
-        .join(format!("clipforge-{version}-{target}"));
+        .join(format!("clipforge-{version}-{target}{}", variant.suffix()));
     if out_dir.exists() {
         std::fs::remove_dir_all(&out_dir)
             .with_context(|| format!("clearing {}", out_dir.display()))?;
@@ -53,7 +122,7 @@ pub fn package() -> Result<()> {
     std::fs::create_dir_all(out_dir.join("fonts"))
         .with_context(|| format!("creating {}", out_dir.display()))?;
 
-    std::fs::copy(&built, out_dir.join(exe_name))
+    std::fs::copy(built, out_dir.join(exe_name))
         .with_context(|| format!("copying the binary to {}", out_dir.display()))?;
 
     // The font is what makes the UI look right; without it the app falls back
@@ -94,21 +163,28 @@ pub fn package() -> Result<()> {
         }
     }
 
-    std::fs::write(out_dir.join("README.txt"), quickstart(&version))?;
+    let bundled = match (variant, ffmpeg_source) {
+        (Variant::Full, Some(source)) => Some(bundle_ffmpeg(source, &out_dir)?),
+        _ => None,
+    };
+    std::fs::write(out_dir.join("README.txt"), quickstart(version, bundled))?;
 
-    println!("\nwrote {}", out_dir.display());
-    println!("\ncontents:");
-    list_dir(&out_dir, "")?;
+    println!("wrote {}", out_dir.display());
+    list_dir(&out_dir, "  ")?;
 
     if cfg!(windows) {
-        build_portable_zip(&root, &out_dir, &version)?;
-        match build_installer(&root, &out_dir, &version) {
-            Ok(Some(path)) => println!("installer: {}", path.display()),
-            Ok(None) => println!(
-                "skipping the installer: NSIS (makensis) was not found. \
-                 Install it from https://nsis.sourceforge.io/ and re-run `cargo xtask package`."
-            ),
-            Err(err) => println!("installer build failed: {err:#}"),
+        build_portable_zip(root, &out_dir, version, variant)?;
+        // One installer is enough: the slim build is the "bring your own
+        // FFmpeg" option and is portable-only on purpose.
+        if variant == Variant::Full {
+            match build_installer(root, &out_dir, version) {
+                Ok(Some(path)) => println!("installer: {}", path.display()),
+                Ok(None) => println!(
+                    "skipping the installer: NSIS (makensis) was not found. \
+                     Install it from https://nsis.sourceforge.io/ and re-run `cargo xtask package`."
+                ),
+                Err(err) => println!("installer build failed: {err:#}"),
+            }
         }
     }
 
@@ -117,11 +193,16 @@ pub fn package() -> Result<()> {
 
 /// Zips the portable folder next to it, so the release page has an
 /// extract-and-run option that needs no installer.
-fn build_portable_zip(root: &Path, out_dir: &Path, version: &str) -> Result<PathBuf> {
+fn build_portable_zip(
+    root: &Path,
+    out_dir: &Path,
+    version: &str,
+    variant: Variant,
+) -> Result<PathBuf> {
     let name = out_dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| format!("clipforge-{version}"));
+        .unwrap_or_else(|| format!("clipforge-{version}{}", variant.suffix()));
     let zip_path = root.join("dist").join(format!("{name}.zip"));
 
     if zip_path.exists() {
@@ -296,6 +377,87 @@ fn write_utf8_bom(path: &Path, contents: &str) -> Result<()> {
     std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
 }
 
+/// Files copied into `bin/` when an FFmpeg install is bundled.
+///
+/// The shared build splits the libraries into DLLs; `ffplay` and `avdevice`
+/// are not used by ClipForge, and dropping them saves ~21 MB. Everything else
+/// is required or `ffmpeg.exe` fails to load.
+const BUNDLED_FFMPEG_FILES: &[&str] = &[
+    "ffmpeg.exe",
+    "ffprobe.exe",
+    "avcodec-*.dll",
+    "avfilter-*.dll",
+    "avformat-*.dll",
+    "avutil-*.dll",
+    "swresample-*.dll",
+    "swscale-*.dll",
+];
+
+/// Finds an FFmpeg build to bundle.
+///
+/// Tried in order: `CLIPFORGE_FFMPEG_DIR`, a vendored `vendor/ffmpeg/bin`, then
+/// the location a developer on this machine is likely to have it in.
+fn find_ffmpeg_install() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+
+    std::env::var_os("CLIPFORGE_FFMPEG_DIR")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain([
+            repo_root().join("vendor").join("ffmpeg").join("bin"),
+            PathBuf::from(r"C:\tools\ffmpeg\bin"),
+        ])
+        .find(|dir| dir.join("ffmpeg.exe").is_file() && dir.join("ffprobe.exe").is_file())
+}
+
+/// Copies an FFmpeg build into `<out>/bin`.
+fn bundle_ffmpeg(source: &Path, out_dir: &Path) -> Result<PathBuf> {
+    let dest = out_dir.join("bin");
+    std::fs::create_dir_all(&dest).with_context(|| format!("creating {}", dest.display()))?;
+
+    let mut copied = 0usize;
+    for pattern in BUNDLED_FFMPEG_FILES {
+        let entries =
+            std::fs::read_dir(source).with_context(|| format!("reading {}", source.display()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+                continue;
+            };
+            if !glob_match(pattern, &name) {
+                continue;
+            }
+            std::fs::copy(&path, dest.join(&name))
+                .with_context(|| format!("copying {}", path.display()))?;
+            copied += 1;
+        }
+    }
+
+    if copied == 0 {
+        bail!(
+            "found {} but none of the expected files matched",
+            source.display()
+        );
+    }
+
+    println!("bundled FFmpeg from {} ({copied} files)", source.display());
+    Ok(source.to_path_buf())
+}
+
+/// Minimal `*` glob for the DLL names; full pattern matching is overkill here.
+fn glob_match(pattern: &str, name: &str) -> bool {
+    match pattern.split_once('*') {
+        Some((prefix, suffix)) => {
+            name.len() >= prefix.len() + suffix.len()
+                && name.starts_with(prefix)
+                && name.ends_with(suffix)
+        }
+        None => pattern == name,
+    }
+}
+
 /// Looks for `makensis` on `PATH`, then in the two standard NSIS folders.
 fn find_makensis() -> Option<PathBuf> {
     if Command::new("makensis")
@@ -318,22 +480,36 @@ fn find_makensis() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn quickstart(version: &str) -> String {
+fn quickstart(version: &str, bundled_ffmpeg: Option<PathBuf>) -> String {
+    let edition = if bundled_ffmpeg.is_some() {
+        "This is the FULL build: FFmpeg is included in `bin`."
+    } else {
+        "This is the SLIM build: FFmpeg is NOT included."
+    };
+    let ffmpeg = match bundled_ffmpeg {
+        Some(_) => "1. FFmpeg is already included in the `bin` folder, so no separate
+   install is needed. See THIRD_PARTY.md for its licence and source."
+            .to_owned(),
+        None => "1. FFmpeg is required but was NOT included in this build.
+
+   Either:
+     a) install FFmpeg so that `ffmpeg` and `ffprobe` are on PATH, or
+     b) put ffmpeg.exe and ffprobe.exe (plus their DLLs) into a folder named
+        `bin` next to clipforge.exe.
+
+   ClipForge needs FFmpeg 6.0 or newer, with libx264 for precise export."
+            .to_owned(),
+    };
+
     format!(
         "ClipForge {version}
 =================
 
 This is a portable build. Nothing is installed; delete the folder to remove it.
 
-1. FFmpeg is required and is NOT bundled (it is GPL software, distributed
-   separately - see THIRD_PARTY.md).
+{edition}
 
-   Either:
-     a) install FFmpeg so that `ffmpeg` and `ffprobe` are on PATH, or
-     b) put ffmpeg.exe and ffprobe.exe into a folder named `bin` next to
-        clipforge.exe.
-
-   ClipForge needs FFmpeg 6.0 or newer, with libx264 for precise export.
+{ffmpeg}
 
 2. Double-click clipforge.exe, or drag a video file onto it.
 
@@ -439,10 +615,39 @@ mod tests {
 
     #[test]
     fn quickstart_mentions_ffmpeg_and_limitations() {
-        let text = quickstart("9.9.9");
+        let text = quickstart("9.9.9", None);
         assert!(text.contains("FFmpeg"));
         assert!(text.contains("9.9.9"));
         assert!(text.contains("keyframes"));
         assert!(text.contains("bin"));
+        assert!(text.contains("NOT included"));
+    }
+
+    #[test]
+    fn quickstart_says_when_ffmpeg_is_bundled() {
+        let text = quickstart("9.9.9", Some(PathBuf::from(r"C:\tools\ffmpeg\bin")));
+        assert!(text.contains("already included"));
+        assert!(text.contains("FULL build"));
+        assert!(!text.contains("was NOT included"));
+
+        let slim = quickstart("9.9.9", None);
+        assert!(slim.contains("SLIM build"));
+        assert!(slim.contains("NOT included"));
+    }
+
+    #[test]
+    fn variants_only_differ_by_suffix() {
+        assert_eq!(Variant::Full.suffix(), "");
+        assert_eq!(Variant::Slim.suffix(), "-slim");
+        assert_ne!(Variant::Full.label(), Variant::Slim.label());
+    }
+
+    #[test]
+    fn glob_matches_star_patterns() {
+        assert!(glob_match("ffmpeg.exe", "ffmpeg.exe"));
+        assert!(!glob_match("ffmpeg.exe", "ffprobe.exe"));
+        assert!(glob_match("avcodec-*.dll", "avcodec-63.dll"));
+        assert!(!glob_match("avcodec-*.dll", "avformat-63.dll"));
+        assert!(!glob_match("avcodec-*.dll", "avcodec-63.dll.bak"));
     }
 }
