@@ -164,7 +164,11 @@ fn assemble(
     }
 
     let bundled = match (variant, ffmpeg_source) {
-        (Variant::Full, Some(source)) => Some(bundle_ffmpeg(source, &out_dir)?),
+        (Variant::Full, Some(source)) => {
+            bundle_ffmpeg(source, &out_dir)?;
+            verify_bundle(&out_dir.join("bin"))?;
+            Some(source.to_path_buf())
+        }
         _ => None,
     };
     std::fs::write(out_dir.join("README.txt"), quickstart(version, bundled))?;
@@ -379,19 +383,60 @@ fn write_utf8_bom(path: &Path, contents: &str) -> Result<()> {
 
 /// Files copied into `bin/` when an FFmpeg install is bundled.
 ///
-/// The shared build splits the libraries into DLLs; `ffplay` and `avdevice`
-/// are not used by ClipForge, and dropping them saves ~21 MB. Everything else
-/// is required or `ffmpeg.exe` fails to load.
+/// `ffmpeg.exe` imports `avdevice-63.dll` at load time even though ClipForge
+/// never opens a capture device, so it has to ship: without it Windows fails
+/// with "avdevice-63.dll not found" before `ffmpeg` runs at all. This was only
+/// invisible on a dev machine because `C:\tools\ffmpeg\bin` was on `PATH`.
+///
+/// `ffplay.exe` is the one file that is genuinely unused; skipping it saves
+/// ~17 MB.
 const BUNDLED_FFMPEG_FILES: &[&str] = &[
     "ffmpeg.exe",
     "ffprobe.exe",
     "avcodec-*.dll",
+    "avdevice-*.dll",
     "avfilter-*.dll",
     "avformat-*.dll",
     "avutil-*.dll",
     "swresample-*.dll",
     "swscale-*.dll",
 ];
+
+/// Runs the bundled `ffmpeg.exe` with `PATH` cleared except for the bundle's
+/// own directory.
+///
+/// Without this the bundle was only ever tested on a machine that also had a
+/// system-wide FFmpeg on `PATH`, so a missing DLL went unnoticed: Windows found
+/// it in `C:\tools\ffmpeg\bin`. Clearing `PATH` forces the process to resolve
+/// every import from `bin/`, which is what a fresh machine sees.
+fn verify_bundle(bin_dir: &Path) -> Result<()> {
+    for exe in ["ffmpeg.exe", "ffprobe.exe"] {
+        let output = Command::new(bin_dir.join(exe))
+            .arg("-version")
+            .env_clear()
+            // Keep the few variables Windows itself needs to start a process.
+            .env(
+                "SystemRoot",
+                std::env::var("SystemRoot").unwrap_or_default(),
+            )
+            .env("PATH", bin_dir)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .with_context(|| format!("running bundled {exe}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!(
+                "bundled {exe} failed to start with an isolated PATH — a required DLL is \
+                 probably missing from {}.\n{stderr}",
+                bin_dir.display()
+            );
+        }
+    }
+
+    println!("verified the bundled FFmpeg starts without a system install");
+    Ok(())
+}
 
 /// Finds an FFmpeg build to bundle.
 ///
