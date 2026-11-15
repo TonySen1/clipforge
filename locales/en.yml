@@ -29,6 +29,10 @@ timeline:
   zoom_in: Zoom in
   zoom_out: Zoom out
 
+update:
+  available: "New version {} — open download page"
+  open_release: Opens the releases page in your browser
+
 settings:
   title: Settings
   appearance: Appearance

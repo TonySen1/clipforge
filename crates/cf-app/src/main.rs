@@ -8,6 +8,7 @@ mod export;
 mod frame_cache;
 mod import;
 mod preview;
+mod update;
 
 use eframe::egui;
 use eframe::egui::IconData;

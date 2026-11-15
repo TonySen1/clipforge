@@ -29,6 +29,10 @@ timeline:
   zoom_in: 放大
   zoom_out: 缩小
 
+update:
+  available: "有新版本 {} — 打开下载页"
+  open_release: 在浏览器中打开 Release 页面
+
 settings:
   title: 设置
   appearance: 外观

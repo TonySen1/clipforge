@@ -26,6 +26,9 @@ thiserror = "2"
 log = "0.4"
 env_logger = "0.11"
 rfd = "0.18"
+# Update check only. Native TLS (Windows schannel) keeps the binary ~1 MB
+# smaller than rustls and reuses the OS certificate store.
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
 
 [profile.release]
 lto = "thin"

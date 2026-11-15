@@ -8,6 +8,7 @@ pub mod error;
 pub mod media;
 pub mod prefs;
 pub mod time;
+pub mod version;
 
 pub use domain::{
     Clip, ClipId, EditError, History, MediaSource, MergeOutcome, Project, SourceId, Track, TrackId,

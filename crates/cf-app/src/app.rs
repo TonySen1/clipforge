@@ -165,6 +165,12 @@ pub struct ClipForgeApp {
     /// runs 100-200 ms ahead of the picture after every seek.
     audio_pending_start: Option<cf_core::Time>,
 
+    // --- update check ---------------------------------------------------
+    /// Receiver from the one-shot GitHub release check.
+    update_rx: std::sync::mpsc::Receiver<crate::update::UpdateEvent>,
+    /// Newer tag found, shown in the status bar until clicked or dismissed.
+    update_available: Option<String>,
+
     // --- P5: export -----------------------------------------------------
     export_open: bool,
     export_output: Option<PathBuf>,
@@ -205,6 +211,8 @@ impl ClipForgeApp {
             logo_light,
             logo_dark,
             mark,
+            update_rx: crate::update::check_async(cc.egui_ctx.clone()),
+            update_available: None,
             settings_open: false,
             about_open: false,
             status: StatusMessage::Ready,
@@ -355,6 +363,27 @@ impl ClipForgeApp {
                         .size(11.0)
                         .color(engine_color),
                 );
+
+                // Update notice sits left of the engine label and only appears
+                // when a newer tag exists. Deliberately quiet: a check that
+                // finds nothing leaves no trace at all.
+                if let Some(tag) = self.update_available.clone() {
+                    ui.add_space(10.0);
+                    let label = tr("update.available").replace("{}", &tag);
+                    let response = ui
+                        .add(
+                            egui::Label::new(egui::RichText::new(label).size(11.0).color(p.accent))
+                                .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text(tr("update.open_release"));
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if response.clicked() {
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab(crate::update::RELEASES_PAGE));
+                    }
+                }
             });
         });
     }
@@ -1799,6 +1828,26 @@ impl ClipForgeApp {
     }
 
     /// Drains worker events. Called once per frame before drawing.
+    /// Turns an arrived update check into a status-bar notice.
+    ///
+    /// A failure is logged only: being offline, behind a proxy, or rate-limited
+    /// is not something to interrupt the user about.
+    fn poll_update(&mut self) {
+        let Some(event) = crate::update::poll(&self.update_rx) else {
+            return;
+        };
+        match event {
+            crate::update::UpdateEvent::Available { tag, .. } => {
+                log::info!("a newer release is available: {tag}");
+                self.update_available = Some(tag);
+            }
+            crate::update::UpdateEvent::UpToDate => log::debug!("update check: up to date"),
+            crate::update::UpdateEvent::Failed(detail) => {
+                log::debug!("update check failed: {detail}");
+            }
+        }
+    }
+
     fn poll_imports(&mut self) {
         while let Some(event) = self.importer.try_recv() {
             match event {
@@ -1976,6 +2025,7 @@ impl eframe::App for ClipForgeApp {
         self.poll_imports();
         self.poll_preview(&ctx);
         self.poll_export();
+        self.poll_update();
         self.handle_shortcuts(&ctx);
         self.maybe_follow_system_theme(&ctx);
         self.handle_dropped_files(&ctx);
