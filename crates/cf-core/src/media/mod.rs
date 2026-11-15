@@ -5,6 +5,7 @@
 //! I/O.
 
 pub mod audio;
+pub mod capture;
 pub mod export;
 pub mod ffmpeg;
 pub mod keyframes;
@@ -13,6 +14,7 @@ pub mod probe;
 pub mod progress;
 
 pub use audio::{AudioBuffer, CHANNELS, SAMPLE_RATE};
+pub use capture::{capture_frame, capture_path, ImageFormat, DEFAULT_SUFFIX};
 pub use export::{
     check_compat, only_segments, plan_lossless, plan_precise, timeline_pieces, CompatIssue,
     CompatReport, ExportBlocker, ExportMode, ExportRange, LosslessPlan, LosslessRequest,

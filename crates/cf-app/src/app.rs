@@ -41,6 +41,8 @@ enum StatusMessage {
     Exported(String),
     ExportFailed(String),
     ExportCancelled,
+    Captured(String),
+    CaptureFailed(String),
 }
 
 impl StatusMessage {
@@ -60,6 +62,10 @@ impl StatusMessage {
                 format!("{}: {detail}", tr("status.export_failed"))
             }
             Self::ExportCancelled => tr("status.export_cancelled").to_string(),
+            Self::Captured(name) => format!("{}: {name}", tr("status.captured")),
+            Self::CaptureFailed(detail) => {
+                format!("{}: {detail}", tr("status.capture_failed"))
+            }
         }
     }
 
@@ -71,6 +77,7 @@ impl StatusMessage {
                 | Self::EngineMissing
                 | Self::EditFailed(_)
                 | Self::ExportFailed(_)
+                | Self::CaptureFailed(_)
         )
     }
 
@@ -81,6 +88,7 @@ impl StatusMessage {
                 | Self::EngineMissing
                 | Self::EditFailed(_)
                 | Self::ExportFailed(_)
+                | Self::CaptureFailed(_)
         )
     }
 }
@@ -165,6 +173,11 @@ pub struct ClipForgeApp {
     /// runs 100-200 ms ahead of the picture after every seek.
     audio_pending_start: Option<cf_core::Time>,
 
+    // --- capture --------------------------------------------------------
+    /// Paths written this session, so a second capture never reuses a name
+    /// even before the filesystem reports the first one.
+    captured_paths: Vec<PathBuf>,
+
     // --- update check ---------------------------------------------------
     /// Receiver from the one-shot GitHub release check.
     update_rx: std::sync::mpsc::Receiver<crate::update::UpdateEvent>,
@@ -211,6 +224,7 @@ impl ClipForgeApp {
             logo_light,
             logo_dark,
             mark,
+            captured_paths: Vec::new(),
             update_rx: crate::update::check_async(cc.egui_ctx.clone()),
             update_available: None,
             settings_open: false,
@@ -1768,6 +1782,61 @@ impl ClipForgeApp {
                 ));
                 self.request_seek(true);
             }
+            TransportAction::Capture => self.capture_frame(),
+        }
+    }
+
+    /// Saves the frame under the playhead next to its source video.
+    ///
+    /// Synchronous: one FFmpeg call for a single frame takes a few hundred
+    /// milliseconds even at 4K, and the alternative (a worker plus progress
+    /// UI) is more machinery than a button that writes one file justifies.
+    fn capture_frame(&mut self) {
+        let Some((source_id, source_time)) = self.media_at(self.project.playhead) else {
+            self.notify(StatusMessage::CaptureFailed(tr("status.capture_no_frame")));
+            return;
+        };
+        let Some(engine) = &self.engine else {
+            self.notify(StatusMessage::CaptureFailed(tr("status.engine_missing")));
+            return;
+        };
+        let Some(source) = self.project.source(source_id) else {
+            return;
+        };
+
+        let output = cf_core::media::capture::capture_path(
+            source.path(),
+            &self.prefs.capture_suffix,
+            self.capture_image_format(),
+            &self.captured_paths,
+        );
+
+        match cf_core::media::capture::capture_frame(
+            &engine.install,
+            source.path(),
+            &source.info,
+            source_time,
+            &output,
+        ) {
+            Ok(path) => {
+                log::info!("captured {} at {}", path.display(), source_time);
+                // Remember it so a second capture in this session never picks
+                // the same name, even before the file is visible on disk.
+                self.captured_paths.push(path.clone());
+                let name = file_label(&path);
+                self.notify(StatusMessage::Captured(name));
+            }
+            Err(err) => {
+                log::warn!("capture failed: {}", err.detail());
+                self.notify(StatusMessage::CaptureFailed(err.detail()));
+            }
+        }
+    }
+
+    fn capture_image_format(&self) -> cf_core::media::ImageFormat {
+        match self.prefs.capture_format {
+            cf_core::CaptureFormat::Png => cf_core::media::ImageFormat::Png,
+            cf_core::CaptureFormat::Jpg => cf_core::media::ImageFormat::Jpeg,
         }
     }
 

@@ -16,5 +16,5 @@ pub use domain::{
 };
 pub use error::CoreError;
 pub use media::{FfmpegInstall, KeyframeIndex, MediaInfo};
-pub use prefs::{Locale, Preferences, PreviewQuality, ThemeMode};
+pub use prefs::{CaptureFormat, Locale, Preferences, PreviewQuality, ThemeMode};
 pub use time::{FrameRate, Time, TimeRange};

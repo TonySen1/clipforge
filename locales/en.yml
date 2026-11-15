@@ -39,6 +39,9 @@ settings:
   theme: Theme
   language: Language
   export: Export
+  capture: Screenshot
+  capture_suffix: File name suffix
+  capture_hint: "Saved next to the source video: Main Edit.mp4 becomes Main Edit-poster.png"
   remove_gaps: Remove gaps between clips when exporting
   remove_gaps_hint: Empty spans are skipped so clips play back to back. The timeline keeps its layout.
   on: "On"
@@ -82,6 +85,9 @@ status:
   exported: Export finished
   export_failed: Export failed
   export_cancelled: Export cancelled
+  captured: Screenshot saved
+  capture_failed: Screenshot failed
+  capture_no_frame: No frame under the playhead
 
 media:
   sources: Media

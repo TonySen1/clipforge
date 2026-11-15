@@ -3,7 +3,7 @@
 use crate::i18n::tr;
 use crate::theme::{Metrics, Palette};
 use crate::widgets::controls::subtle_button;
-use cf_core::{Locale, Preferences, ThemeMode};
+use cf_core::{CaptureFormat, Locale, Preferences, ThemeMode};
 use egui::{
     Align, Button, Color32, Context, Frame, Id, Margin, Modal, RichText, ScrollArea, Stroke, Ui,
 };
@@ -101,6 +101,38 @@ pub fn show(ctx: &Context, p: &Palette, prefs: &mut Preferences) -> SettingsActi
                         .size(11.0)
                         .color(p.text_muted),
                 );
+
+                ui.add_space(16.0);
+                divider(ui, p);
+                ui.add_space(12.0);
+
+                section(ui, p, &tr("settings.capture"));
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(tr("settings.capture_suffix"))
+                        .size(13.0)
+                        .color(p.text_secondary),
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut prefs.capture_suffix)
+                            .desired_width(140.0)
+                            .hint_text(cf_core::media::capture::DEFAULT_SUFFIX),
+                    );
+                    ui.add_space(12.0);
+                    for format in CaptureFormat::ALL {
+                        if option(ui, p, prefs.capture_format == format, format.label()).clicked() {
+                            prefs.capture_format = format;
+                        }
+                    }
+                });
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new(tr("settings.capture_hint"))
+                        .size(11.0)
+                        .color(p.text_muted),
+                );
             });
 
             ui.add_space(18.0);
@@ -111,12 +143,13 @@ pub fn show(ctx: &Context, p: &Palette, prefs: &mut Preferences) -> SettingsActi
             });
         });
 
+    // Compare the whole preferences struct rather than listing fields: adding a
+    // control used to need a matching line here, and forgetting it silently
+    // dropped the change on close (which is how the capture settings first
+    // shipped).
     if close || response.should_close() {
         SettingsAction::Close
-    } else if prefs.theme != before.theme
-        || prefs.locale != before.locale
-        || prefs.remove_gaps_on_export != before.remove_gaps_on_export
-    {
+    } else if *prefs != before {
         SettingsAction::Changed
     } else {
         SettingsAction::None

@@ -129,6 +129,38 @@ pub struct Preferences {
     /// silence. Lossless export cannot represent gaps at all, so this also
     /// decides whether a gapped timeline can be exported losslessly.
     pub remove_gaps_on_export: bool,
+    /// Appended to the source file name when capturing a still.
+    /// `Main Edit.mp4` + `-poster` -> `Main Edit-poster.png`.
+    pub capture_suffix: String,
+    /// File extension for captures: `png` or `jpg`.
+    pub capture_format: CaptureFormat,
+}
+
+/// Image format written by the capture button.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureFormat {
+    #[default]
+    Png,
+    Jpg,
+}
+
+impl CaptureFormat {
+    pub const ALL: [Self; 2] = [Self::Png, Self::Jpg];
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpg => "jpg",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Jpg => "JPG",
+        }
+    }
 }
 
 impl Default for Preferences {
@@ -141,6 +173,8 @@ impl Default for Preferences {
             preview_max_height: 720,
             preview_quality: PreviewQuality::default(),
             remove_gaps_on_export: false,
+            capture_suffix: crate::media::capture::DEFAULT_SUFFIX.to_owned(),
+            capture_format: CaptureFormat::default(),
         }
     }
 }
@@ -231,6 +265,8 @@ mod tests {
             preview_max_height: 720,
             preview_quality: PreviewQuality::default(),
             remove_gaps_on_export: true,
+            capture_suffix: "-poster".to_owned(),
+            capture_format: CaptureFormat::Jpg,
         };
 
         let dir = std::env::temp_dir().join("clipforge-prefs-test");

@@ -13,6 +13,8 @@ pub enum TransportAction {
     PrevFrame,
     NextFrame,
     MuteToggle,
+    /// Save the frame under the playhead as an image.
+    Capture,
     /// Volume changed in 0.0..=1.0.
     Volume(f32),
 }
@@ -36,6 +38,7 @@ enum Glyph {
     Pause,
     Volume,
     Muted,
+    Capture,
 }
 
 /// Draws the transport bar and returns the action the user triggered, if any.
@@ -107,7 +110,10 @@ pub fn transport(
     const BUTTON_W: f32 = 28.0;
     const BUTTON_GAP: f32 = 2.0;
     const BUTTON_H: f32 = 24.0;
-    let cluster_width = BUTTON_W * 3.0 + BUTTON_GAP * 2.0;
+    // The capture button sits right after "next frame" with a wider gap, so it
+    // reads as a separate action rather than a fourth transport step.
+    const CAPTURE_GAP: f32 = 10.0;
+    let cluster_width = BUTTON_W * 4.0 + BUTTON_GAP * 2.0 + CAPTURE_GAP;
     let cluster_left = bar.center().x - cluster_width * 0.5;
 
     let buttons = [
@@ -117,14 +123,18 @@ pub fn transport(
             TransportAction::PlayPause,
         ),
         (Glyph::NextFrame, TransportAction::NextFrame),
+        (Glyph::Capture, TransportAction::Capture),
     ];
 
     for (index, (glyph, kind)) in buttons.into_iter().enumerate() {
+        // Index 3 is the capture button; everything else is a tight cluster.
+        let x_offset = if index < 3 {
+            index as f32 * (BUTTON_W + BUTTON_GAP)
+        } else {
+            3.0 * (BUTTON_W + BUTTON_GAP) + CAPTURE_GAP - BUTTON_GAP
+        };
         let rect = Rect::from_min_size(
-            pos2(
-                cluster_left + index as f32 * (BUTTON_W + BUTTON_GAP),
-                bar.center().y - BUTTON_H * 0.5,
-            ),
+            pos2(cluster_left + x_offset, bar.center().y - BUTTON_H * 0.5),
             vec2(BUTTON_W, BUTTON_H),
         );
         let hit = ui.interact(
@@ -148,7 +158,17 @@ pub fn transport(
         } else {
             p.text_primary
         };
-        draw_glyph(painter, rect, glyph, color);
+
+        // The camera outline has curves that the geometric glyphs below cannot
+        // express, so it comes from the icon set like the volume icon does.
+        let drawn_from_texture = if glyph == Glyph::Capture {
+            draw_capture_icon(painter, rect, icons, color)
+        } else {
+            false
+        };
+        if !drawn_from_texture {
+            draw_glyph(painter, rect, glyph, color);
+        }
 
         if enabled && hit.clicked() {
             action = Some(kind);
@@ -259,6 +279,35 @@ pub fn transport(
     action
 }
 
+/// Draws the camera icon into `rect`, returning `false` when the texture is not
+/// resident yet so the caller can fall back to a geometric glyph.
+fn draw_capture_icon(
+    painter: &egui::Painter,
+    rect: Rect,
+    icons: Option<&crate::icons::IconSet>,
+    color: egui::Color32,
+) -> bool {
+    let Some(icons) = icons else {
+        return false;
+    };
+    let Some(texture) = icons.get(crate::icons::Icon::Capture) else {
+        return false;
+    };
+
+    // 18 px: the camera has 1.7 px strokes at a 24 px viewBox, which stay legible
+    // down to this size without looking heavier than the vector glyphs.
+    let side = 18.0;
+    let image_rect = Rect::from_center_size(rect.center(), vec2(side, side));
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    mesh.add_rect_with_uv(
+        image_rect,
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        color,
+    );
+    painter.add(egui::Shape::mesh(mesh));
+    true
+}
+
 fn format_timecode(t: Time) -> String {
     let micros = t.micros().max(0);
     let total_ms = micros / 1_000;
@@ -313,6 +362,12 @@ fn draw_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: Glyph, color: eg
                 [pos2(bx, c.y - s), pos2(bx, c.y + s)],
                 Stroke::new(2.0, color),
             );
+        }
+        Glyph::Capture => {
+            // Fallback only: a rectangle with a circle reads as a camera.
+            let body = Rect::from_center_size(c, vec2(s * 1.9, s * 1.4));
+            painter.rect_stroke(body, 2.0, Stroke::new(1.6, color), egui::StrokeKind::Inside);
+            painter.circle_stroke(c, s * 0.5, Stroke::new(1.6, color));
         }
         Glyph::Volume | Glyph::Muted => {
             // Speaker = small rectangle (driver) + trapezoid cone, the same

@@ -25,10 +25,11 @@ pub enum Icon {
     Volume,
     VolumeMuted,
     Github,
+    Capture,
 }
 
 impl Icon {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Split,
         Self::Razor,
         Self::Scissors,
@@ -42,6 +43,7 @@ impl Icon {
         Self::Volume,
         Self::VolumeMuted,
         Self::Github,
+        Self::Capture,
     ];
 
     fn stem(self) -> &'static str {
@@ -59,6 +61,7 @@ impl Icon {
             Self::Volume => "volume",
             Self::VolumeMuted => "volume-muted",
             Self::Github => "github",
+            Self::Capture => "capture",
         }
     }
 
@@ -86,6 +89,7 @@ impl Icon {
             // Brand mark: drawn at 20 px, so rasterise the 64 px source. The
             // 32 px one visibly stair-steps at this size.
             Self::Github => include_bytes!("../../../assets/icons/ui-png/github-64.png"),
+            Self::Capture => include_bytes!("../../../assets/icons/ui-png/capture-32.png"),
         }
     }
 }

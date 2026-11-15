@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 截图：相机机身 + 镜头 -->
+  <path d="M3.2 8.4h2.9l1.5-2.1h8.8l1.5 2.1h2.9a1.4 1.4 0 0 1 1.4 1.4v9.2a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4V9.8a1.4 1.4 0 0 1 1.4-1.4z"/>
+  <circle cx="12" cy="13.6" r="3.5"/>
+</svg>
