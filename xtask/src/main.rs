@@ -63,10 +63,11 @@ fn icons() -> Result<()> {
     let out_dir = root.join("assets").join("icons");
     std::fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
 
-    let app_icon = logo_dir.join("app-icon.svg");
+    // The 3D mark is the app icon: thickness, bevel and the hot cut face read
+    // better at 32 px than the flat tile did. `app-icon.svg` stays in the repo
+    // as the previous design.
+    let app_icon = logo_dir.join("logo-3d.svg");
 
-    // One source for every size. The artwork was scaled up inside the tile so
-    // it stays legible at 16-32 px without a separate simplified variant.
     for size in [16u32, 24, 32, 48, 64, 128, 256, 512, 1024] {
         render(&app_icon, &out_dir.join(format!("icon-{size}.png")), size)?;
     }
@@ -88,6 +89,17 @@ fn icons() -> Result<()> {
             &out_dir.join(format!("mark-neutral-{size}.png")),
             size,
         )?;
+    }
+
+    // Alternative marks, rendered alongside the app icon so the designs can be
+    // compared at real sizes.
+    for (source, prefix) in [
+        (logo_dir.join("logo-duo.svg"), "logo-duo"),
+        (logo_dir.join("app-icon.svg"), "logo-flat"),
+    ] {
+        for size in [16u32, 24, 32, 48, 64, 128, 256, 512, 1024] {
+            render(&source, &out_dir.join(format!("{prefix}-{size}.png")), size)?;
+        }
     }
 
     write_ico(&out_dir)?;

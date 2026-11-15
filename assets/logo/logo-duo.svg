@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <!--
+    黑白双色标识 · 一张素材卡被斜切一刀，两半向两侧滑开。
+
+    严格两个颜色：黑 #0B0B0C 作底，白 #FFFFFF 作形。开缝与片孔都“透出底色”，
+    不存在第三个颜色 —— 单色印刷、模板喷漆、单色 favicon 都能一比一复现。
+
+    五条约束：
+    1. 左右对称分离，不做单边滑动。单边滑动会让整张卡看着是歪的；对称分离
+       读作“被劈开后弹开”，这才是剪切该有的力量感。
+    2. 斜切而不是竖切。竖缝会被读成“两格画面”，斜缝只会被读成“被切了一刀”。
+    3. 片孔只留四个，全部避开刀口。劈开的半孔在 16px 下只是一坨杂点。
+    4. 两半的锐角永远贴着缝，圆角永远朝外 —— 切开的方向因此板上钉钉。
+    5. 缝宽 ≈30px（512 画布），16px 下仍有 1px 可见，32px 下是干净的 2px。
+  -->
+  <defs>
+    <!-- 切口：(296,136) → (208,376)，法线≈(0.939,0.344) -->
+    <clipPath id="leftHalf">
+      <path d="M108 136 H296 L208 376 H108 A44 44 0 0 1 64 332 V180 A44 44 0 0 1 108 136 Z"/>
+    </clipPath>
+    <clipPath id="rightHalf">
+      <path d="M296 136 H388 A44 44 0 0 1 432 180 V332 A44 44 0 0 1 388 376
+               H208 Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="#0B0B0C"/>
+
+  <!-- 左半：左移 16 -->
+  <g transform="translate(-16 0)">
+    <g fill="#FFFFFF" clip-path="url(#leftHalf)">
+      <rect x="64" y="136" width="236" height="240"/>
+    </g>
+    <g fill="#0B0B0C" clip-path="url(#leftHalf)">
+      <rect x="88" y="176" width="70" height="32" rx="14"/>
+      <rect x="88" y="304" width="70" height="32" rx="14"/>
+    </g>
+  </g>
+
+  <!-- 右半：右移 16 -->
+  <g transform="translate(16 0)">
+    <g fill="#FFFFFF" clip-path="url(#rightHalf)">
+      <rect x="208" y="136" width="224" height="240"/>
+    </g>
+    <g fill="#0B0B0C" clip-path="url(#rightHalf)">
+      <rect x="338" y="176" width="70" height="32" rx="14"/>
+      <rect x="338" y="304" width="70" height="32" rx="14"/>
+    </g>
+  </g>
+</svg>

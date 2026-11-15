@@ -2144,15 +2144,19 @@ fn load_brand_textures(
     Option<TextureHandle>,
 ) {
     (
+        // The 3D mark carries its own dark tile, so it works unchanged on a
+        // light or dark dialog. The old light/dark pair is kept in the repo but
+        // no longer loaded, otherwise About would show a different logo than
+        // the taskbar and Explorer.
         load_png(
             ctx,
             "clipforge_logo_light",
-            include_bytes!("../../../assets/icons/logo-light-256.png"),
+            include_bytes!("../../../assets/icons/logo-3d-256.png"),
         ),
         load_png(
             ctx,
             "clipforge_logo_dark",
-            include_bytes!("../../../assets/icons/logo-dark-256.png"),
+            include_bytes!("../../../assets/icons/logo-3d-256.png"),
         ),
         load_png(
             ctx,

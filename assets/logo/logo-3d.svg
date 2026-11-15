@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <!--
+    彩色立体标识 · 一块素材卡被激光斜切，两半沿刀口弹开，切面还在发烫。
+
+    与双色版共用同一套几何（切口 (296,136)→(208,376)），只在渲染上分道扬镳：
+    双色版靠负形，立体版靠厚度与色温。
+
+    立体感的做法，全部是 resvg 吃得下的元素，不用滤镜、不用渐变网格：
+      · 厚度 —— 每片先画一条 (5,15) 偏移的深色底片，再盖上偏移为 0 的彩色封面，
+                露出来的下沿和右沿就是侧壁。两块用同一个偏移方向，物理上才自洽。
+      · 倒角 —— 封面内圈再压两道描边：左上白、右下黑。眼睛靠这一明一暗读到“边”。
+      · 受光 —— 封面上叠一层斜向白色渐变，只在左上亮起来。
+      · 色温 —— 左半冷青蓝、右半暖紫，色差正好在缝口对撞，这是整张图的落点。
+      · 烧灼 —— 切面只描一道线。上一版辉光粗到 34px，把厚度整个盖住了；
+                原则改成：光只能描边，不许占面积。
+  -->
+  <defs>
+    <linearGradient id="bg" x1="72" y1="24" x2="440" y2="496" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1B2B45"/>
+      <stop offset="0.52" stop-color="#0A101B"/>
+      <stop offset="1" stop-color="#04060A"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+                    gradientTransform="translate(256 244) rotate(90) scale(250)">
+      <stop offset="0" stop-color="#4F9CFF" stop-opacity="0.18"/>
+      <stop offset="0.55" stop-color="#8B5CF6" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#8B5CF6" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="faceL" x1="80" y1="136" x2="300" y2="376" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9DEAFF"/>
+      <stop offset="0.38" stop-color="#3C88EE"/>
+      <stop offset="1" stop-color="#1B3D9C"/>
+    </linearGradient>
+    <linearGradient id="faceR" x1="212" y1="136" x2="440" y2="376" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC0F4"/>
+      <stop offset="0.38" stop-color="#A05FF5"/>
+      <stop offset="1" stop-color="#43219C"/>
+    </linearGradient>
+
+    <!-- 侧壁：上沿沾一点封面光，往下迅速掉进阴影 -->
+    <linearGradient id="wallL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3E7BC8"/>
+      <stop offset="0.25" stop-color="#1B3462"/>
+      <stop offset="1" stop-color="#060B15"/>
+    </linearGradient>
+    <linearGradient id="wallR" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6B3AB8"/>
+      <stop offset="0.25" stop-color="#34186A"/>
+      <stop offset="1" stop-color="#0A0616"/>
+    </linearGradient>
+
+    <linearGradient id="sheenL" x1="96" y1="150" x2="268" y2="318" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.42"/>
+      <stop offset="0.40" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="sheenR" x1="252" y1="150" x2="430" y2="328" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="0.44" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="burn" x1="0" y1="130" x2="0" y2="382" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.26" stop-color="#A6F3FF"/>
+      <stop offset="0.52" stop-color="#8FBEFF"/>
+      <stop offset="0.78" stop-color="#C39BFF"/>
+      <stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+
+    <!-- 左片：切口在右侧 -->
+    <path id="pL" d="M108 136 H296 L208 376 H108 A44 44 0 0 1 64 332 V180 A44 44 0 0 1 108 136 Z"/>
+    <!-- 右片：切口在左侧 -->
+    <path id="pR" d="M296 136 H388 A44 44 0 0 1 432 180 V332 A44 44 0 0 1 388 376 H208 Z"/>
+
+    <clipPath id="cL"><use href="#pL"/></clipPath>
+    <clipPath id="cR"><use href="#pR"/></clipPath>
+
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#halo)"/>
+  <rect x="2" y="2" width="508" height="508" rx="110" fill="none"
+        stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2"/>
+
+  <!-- ===== 左片：向左上弹开 18 ===== -->
+  <g transform="translate(-24 -5)">
+    <path d="M64 180 L64 332 A44 44 0 0 0 108 376 L208 376
+               L208 396 L108 396 A44 44 0 0 1 64 352 L64 200 Z" fill="url(#wallL)"/>
+
+    <g clip-path="url(#cL)">
+      <use href="#pL" fill="url(#faceL)"/>
+      <use href="#pL" fill="url(#sheenL)"/>
+      <!-- 倒角：左上亮 -->
+      <path d="M106 139 H296" stroke="#FFFFFF" stroke-opacity="0.66"
+            stroke-width="3.5" stroke-linecap="round"/>
+      <path d="M67 186 V330" stroke="#FFFFFF" stroke-opacity="0.22"
+            stroke-width="3" stroke-linecap="round"/>
+      <!-- 倒角：右下暗 -->
+      <path d="M108 373 H208" stroke="#04070E" stroke-opacity="0.5"
+            stroke-width="3" stroke-linecap="round"/>
+      <path d="M429 186 V330" stroke="#04070E" stroke-opacity="0.35"
+            stroke-width="3" stroke-linecap="round"/>
+      <!-- 切口侧的烧灼暗边：左片 -->
+      <path d="M296 136 L208 376" stroke="#0A1626" stroke-width="5" stroke-opacity="0.95"/>
+      <path d="M296 136 L208 376" stroke="#2C5A8F" stroke-width="2.2" stroke-opacity="0.55"/>
+      <g fill="#03080F" opacity="0.52">
+        <rect x="90" y="174" width="58" height="26" rx="11"/>
+        <rect x="90" y="304" width="58" height="26" rx="11"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- ===== 右片：向右上弹开 18 ===== -->
+  <g transform="translate(24 -5)">
+    <path d="M432 180 L432 332 A44 44 0 0 1 388 376 L208 376
+               L208 396 L388 396 A44 44 0 0 0 432 352 L432 200 Z" fill="url(#wallR)"/>
+
+    <g clip-path="url(#cR)">
+      <use href="#pR" fill="url(#faceR)"/>
+      <use href="#pR" fill="url(#sheenR)"/>
+      <path d="M298 139 H386" stroke="#FFFFFF" stroke-opacity="0.56"
+            stroke-width="3.5" stroke-linecap="round"/>
+      <path d="M429 186 V330" stroke="#FFFFFF" stroke-opacity="0.18"
+            stroke-width="3" stroke-linecap="round"/>
+      <path d="M388 373 H212" stroke="#04070E" stroke-opacity="0.5"
+            stroke-width="3" stroke-linecap="round"/>
+      <!-- 切口侧的烧灼暗边：右片 -->
+      <path d="M296 136 L208 376" stroke="#12082A" stroke-width="5" stroke-opacity="0.95"/>
+      <path d="M296 136 L208 376" stroke="#5E3A9E" stroke-width="2.2" stroke-opacity="0.55"/>
+      <g fill="#06030F" opacity="0.5">
+        <rect x="340" y="174" width="58" height="26" rx="11"/>
+        <rect x="340" y="304" width="58" height="26" rx="11"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- 切缝：一条烧灼线 + 极窄的余温，落在两半之间 -->
+  <g>
+    <!-- 切缝中轴：两半各偏 16，缝心在 x=288→200 一带 -->
+    <path d="M296 131 L208 371" stroke="url(#burn)" stroke-width="2"
+          stroke-opacity="0.9" stroke-linecap="round"/>
+    <circle cx="296" cy="132" r="3.4" fill="#FFFFFF" opacity="0.92"/>
+    <circle cx="296" cy="132" r="9" fill="#A6F3FF" opacity="0.18"/>
+    <circle cx="208" cy="380" r="3.4" fill="#FFFFFF" opacity="0.92"/>
+    <circle cx="208" cy="380" r="9" fill="#A6F3FF" opacity="0.18"/>
+  </g>
+
+</svg>
