@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "cf-app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cf-core",
  "cf-ui",
@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "cf-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "directories",
  "log",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "cf-ui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cf-core",
  "dark-light",
@@ -5527,7 +5527,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "ico",
