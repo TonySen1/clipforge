@@ -91,6 +91,8 @@ status:
 
 media:
   sources: 媒体
+  remove: 从项目中移除
+  removed: 已移除
   no_sources: 尚未导入媒体
   metadata: 片段详情
   select_hint: 选择一个片段以查看详情

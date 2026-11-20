@@ -178,6 +178,52 @@ impl Project {
         self.sources.is_empty()
     }
 
+    /// Removes a source and every clip that references it.
+    ///
+    /// Returns `false` when the id is unknown. Clips on all tracks go: a
+    /// source that is no longer in the list must not be reachable from the
+    /// timeline, or the preview and export would resolve a dangling id.
+    pub fn remove_source(&mut self, id: SourceId) -> bool {
+        let before = self.sources.len();
+        self.sources.retain(|source| source.id != id);
+        if self.sources.len() == before {
+            return false;
+        }
+
+        for track in &mut self.tracks {
+            track.clips.retain(|clip| clip.source_id != id);
+        }
+
+        // Groups that lost members may now hold a single clip; dissolve them
+        // for the same reason delete_clip does.
+        let orphans: Vec<u64> = {
+            let mut groups: Vec<(u64, usize)> = Vec::new();
+            for entry in self.clips() {
+                if let Some(group) = entry.clip.group {
+                    match groups.iter_mut().find(|(g, _)| *g == group) {
+                        Some((_, count)) => *count += 1,
+                        None => groups.push((group, 1)),
+                    }
+                }
+            }
+            groups
+                .into_iter()
+                .filter(|(_, count)| *count <= 1)
+                .map(|(group, _)| group)
+                .collect()
+        };
+        for track in &mut self.tracks {
+            for clip in &mut track.clips {
+                if clip.group.is_some_and(|group| orphans.contains(&group)) {
+                    clip.group = None;
+                }
+            }
+        }
+
+        self.set_playhead(self.playhead);
+        true
+    }
+
     /// Removes every empty span by sliding clips left until they touch.
     ///
     /// Returns a copy so callers can plan an export without disturbing the
@@ -276,6 +322,48 @@ mod tests {
 
         // Past the end there is nothing to resolve.
         assert!(project.resolve(Time::from_secs(20.0)).is_none());
+    }
+
+    #[test]
+    fn remove_source_drops_its_clips() {
+        let mut project = project_with(&[3.0, 2.0]);
+        let removed = project.sources[0].id;
+        let kept = project.sources[1].id;
+
+        assert!(project.remove_source(removed));
+
+        assert_eq!(project.sources.len(), 1);
+        assert_eq!(project.sources[0].id, kept);
+        let remaining: Vec<_> = project
+            .video_track()
+            .unwrap()
+            .clips
+            .iter()
+            .map(|clip| clip.source_id)
+            .collect();
+        assert_eq!(remaining, vec![kept]);
+        // Every clip still points at a source that exists.
+        for clip in project.video_track().unwrap().clips.iter() {
+            assert!(project.source(clip.source_id).is_some());
+        }
+    }
+
+    #[test]
+    fn remove_unknown_source_is_a_no_op() {
+        let mut project = project_with(&[3.0]);
+        assert!(!project.remove_source(SourceId(9999)));
+        assert_eq!(project.sources.len(), 1);
+        assert_eq!(project.video_track().unwrap().clips.len(), 1);
+    }
+
+    #[test]
+    fn removing_a_source_clamps_the_playhead() {
+        let mut project = project_with(&[3.0, 2.0]);
+        project.set_playhead(Time::from_secs(4.5));
+        let first = project.sources[0].id;
+        project.remove_source(first);
+        // The timeline shrank to 2 s, so the playhead must follow.
+        assert!(project.playhead <= project.duration());
     }
 
     #[test]

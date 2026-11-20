@@ -82,21 +82,17 @@ pub fn preview_frame(
     let stage = fit_16_9(rect);
     let image = fit_aspect(stage, frame_aspect);
 
-    // The well sits behind the image so pillarbox/letterbox bars read
-    // intentionally: black in dark mode, a neutral light grey in light mode.
-    painter.rect_filled(stage, Metrics::RADIUS_MD_C, p.bg_stage_inset);
+    // Once a frame is showing there is no drawn frame at all: square corners,
+    // no outline. Rounding clipped the picture's corners, and any border made
+    // the image look boxed in rather than simply present. The inset fill stays
+    // so pillarbox/letterbox bars still have a deliberate colour.
+    painter.rect_filled(stage, 0.0, p.bg_stage_inset);
     painter.add(egui::Shape::image(
         texture.id(),
         image,
         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
         Color32::WHITE,
     ));
-    painter.rect_stroke(
-        stage,
-        Metrics::RADIUS_MD_C,
-        Stroke::new(1.0, p.border_strong.gamma_multiply(0.6)),
-        StrokeKind::Inside,
-    );
 
     if let Some(text) = overlay {
         let pos = pos2(stage.left() + 10.0, stage.top() + 10.0);

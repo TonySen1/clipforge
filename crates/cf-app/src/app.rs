@@ -1685,6 +1685,45 @@ impl ClipForgeApp {
         }
     }
 
+    /// Removes an imported source and everything placed from it.
+    fn remove_source(&mut self, source_id: cf_core::SourceId) {
+        let Some(name) = self
+            .project
+            .sources
+            .iter()
+            .find(|source| source.id == source_id)
+            .map(|source| source.display_name())
+        else {
+            return;
+        };
+
+        self.stop_playback();
+
+        let before = self.project.clone();
+        if !self.project.remove_source(source_id) {
+            return;
+        }
+
+        // Forget the preview pointer so the next seek re-points the worker at
+        // whatever is under the playhead now. No message is sent because the
+        // stale source is only read when a seek asks for it.
+        if self.preview_source == Some(source_id) {
+            self.preview_source = None;
+            self.awaiting = None;
+            self.frame_texture = None;
+        }
+
+        self.selected_clip = None;
+        self.history
+            .push("edit.delete", before, self.project.clone());
+        self.refresh_export_plan();
+        self.request_seek(false);
+        self.notify(StatusMessage::Imported(format!(
+            "{}: {name}",
+            tr("media.removed")
+        )));
+    }
+
     /// Up/Down move the playhead to the start/end of the clip it is inside.
     ///
     /// Falls back to the timeline ends when the playhead sits in a gap, so the
@@ -1728,15 +1767,29 @@ impl ClipForgeApp {
         ui.add_space(4.0);
 
         let mut reveal = None;
-        if let Some(index) = widgets::media_panel::source_list(
+        let mut remove = None;
+        if let Some(action) = widgets::media_panel::source_list(
             ui,
             &p,
             &self.project.sources,
             None,
             &self.pending_imports,
+            Some(&self.icons),
         ) {
-            reveal = self.project.sources.get(index).map(|s| s.id);
+            match action {
+                widgets::media_panel::SourceAction::Select(index) => {
+                    reveal = self.project.sources.get(index).map(|s| s.id);
+                }
+                widgets::media_panel::SourceAction::Delete(index) => {
+                    remove = self.project.sources.get(index).map(|s| s.id);
+                }
+            }
         }
+
+        if let Some(source_id) = remove {
+            self.remove_source(source_id);
+        }
+
         // Jump the playhead to the first clip that uses the clicked source.
         if let Some(source_id) = reveal {
             let start = self

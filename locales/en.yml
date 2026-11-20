@@ -91,6 +91,8 @@ status:
 
 media:
   sources: Media
+  remove: Remove from project
+  removed: Removed
   no_sources: No media imported
   metadata: Clip details
   select_hint: Select a clip to see its details

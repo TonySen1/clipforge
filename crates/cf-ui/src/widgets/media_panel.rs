@@ -9,15 +9,25 @@ use cf_core::domain::MediaSource;
 use cf_core::time::Time;
 use egui::{RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui};
 
-/// Draws the source list. Returns the index the user clicked, if any.
+/// What the user did to the source list.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SourceAction {
+    /// Clicked a row; it becomes the selected source.
+    Select(usize),
+    /// Clicked the row's delete button.
+    Delete(usize),
+}
+
+/// Draws the source list. Returns the action the user triggered, if any.
 pub fn source_list(
     ui: &mut Ui,
     p: &Palette,
     sources: &[MediaSource],
     selected: Option<usize>,
     pending: &[String],
-) -> Option<usize> {
-    let mut clicked = None;
+    icons: Option<&crate::icons::IconSet>,
+) -> Option<SourceAction> {
+    let mut action = None;
 
     ScrollArea::vertical()
         .id_salt("clipforge_sources")
@@ -34,8 +44,10 @@ pub fn source_list(
             }
 
             for (index, source) in sources.iter().enumerate() {
-                if source_row(ui, p, source, selected == Some(index)) {
-                    clicked = Some(index);
+                match source_row(ui, p, icons, source, selected == Some(index)) {
+                    Some(RowHit::Select) => action = Some(SourceAction::Select(index)),
+                    Some(RowHit::Delete) => action = Some(SourceAction::Delete(index)),
+                    None => {}
                 }
             }
 
@@ -44,10 +56,27 @@ pub fn source_list(
             }
         });
 
-    clicked
+    action
 }
 
-fn source_row(ui: &mut Ui, p: &Palette, source: &MediaSource, selected: bool) -> bool {
+/// Which part of a row was clicked.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum RowHit {
+    Select,
+    Delete,
+}
+
+/// Draws one row and reports which part of it was clicked.
+///
+/// The delete button is drawn *after* the row response so it can claim the
+/// click first; otherwise the row would select and the button would never fire.
+fn source_row(
+    ui: &mut Ui,
+    p: &Palette,
+    icons: Option<&crate::icons::IconSet>,
+    source: &MediaSource,
+    selected: bool,
+) -> Option<RowHit> {
     let width = ui.available_width();
     let height = 46.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
@@ -80,10 +109,12 @@ fn source_row(ui: &mut Ui, p: &Palette, source: &MediaSource, selected: bool) ->
     }
 
     let text_left = rect.left() + 12.0;
+    // Leave room for the delete button so a long name never runs under it.
+    let name_budget = ((rect.width() - 60.0) / 6.6).max(8.0) as usize;
     painter.text(
         egui::pos2(text_left, rect.top() + 11.0),
         egui::Align2::LEFT_TOP,
-        ellipsize(&source.display_name(), 28),
+        ellipsize(&source.display_name(), name_budget),
         egui::FontId::proportional(12.5),
         if selected { p.accent } else { p.text_primary },
     );
@@ -104,9 +135,56 @@ fn source_row(ui: &mut Ui, p: &Palette, source: &MediaSource, selected: bool) ->
         p.text_muted,
     );
 
-    response
+    // Delete button, right-aligned. It sits on top of the row rect, so its own
+    // interact() call has to come first in pointer priority — egui gives the
+    // topmost widget the click, and this is registered after the row.
+    let button_size = 22.0;
+    let button_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 6.0 - button_size * 0.5, rect.center().y),
+        egui::vec2(button_size, button_size),
+    );
+    let delete = ui.interact(
+        button_rect,
+        ui.scope_id().with(("media_delete", source.id.0)),
+        Sense::click(),
+    );
+    if delete.hovered() {
+        ui.painter()
+            .rect_filled(button_rect, Metrics::RADIUS_XS_C, p.bg_hover);
+    }
+    if let Some(texture) = icons.and_then(|set| set.get(crate::icons::Icon::Trash)) {
+        let side = 15.0;
+        let image_rect = egui::Rect::from_center_size(button_rect.center(), egui::vec2(side, side));
+        let mut mesh = egui::Mesh::with_texture(texture.id());
+        mesh.add_rect_with_uv(
+            image_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            // Secondary rather than muted: the button has to be findable on
+            // a dark row without hovering first.
+            if delete.hovered() {
+                p.error
+            } else {
+                p.text_secondary
+            },
+        );
+        ui.painter().add(egui::Shape::mesh(mesh));
+    }
+    let delete = delete
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tr("media.remove"));
+
+    if delete.clicked() {
+        return Some(RowHit::Delete);
+    }
+
+    if response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()
+    {
+        return Some(RowHit::Select);
+    }
+
+    None
 }
 
 fn pending_row(ui: &mut Ui, p: &Palette, name: &str) {
