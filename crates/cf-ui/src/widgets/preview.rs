@@ -65,7 +65,6 @@ pub fn preview_frame(
     p: &Palette,
     texture: &TextureHandle,
     frame_aspect: f32,
-    overlay: Option<&str>,
 ) -> Response {
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::hover());
@@ -93,15 +92,6 @@ pub fn preview_frame(
         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
         Color32::WHITE,
     ));
-
-    if let Some(text) = overlay {
-        let pos = pos2(stage.left() + 10.0, stage.top() + 10.0);
-        let galley =
-            painter.layout_no_wrap(text.to_owned(), FontId::monospace(11.0), p.on_stage_primary);
-        let bg = Rect::from_min_size(pos, galley.size() + vec2(12.0, 6.0));
-        painter.rect_filled(bg, Metrics::RADIUS_XS_C, p.scrim_chip);
-        painter.galley(pos + vec2(6.0, 3.0), galley, Color32::WHITE);
-    }
 
     response
 }

@@ -109,14 +109,23 @@ fn source_row(
     }
 
     let text_left = rect.left() + 12.0;
-    // Leave room for the delete button so a long name never runs under it.
-    let name_budget = ((rect.width() - 60.0) / 6.6).max(8.0) as usize;
-    painter.text(
+    // Leave room for the delete button, and truncate by measured width rather
+    // than by character count: a CJK glyph is roughly twice as wide as a Latin
+    // one, so a fixed character budget let Chinese names run under the button.
+    let name_width = (rect.width() - 52.0).max(24.0);
+    let mut job = egui::text::LayoutJob::single_section(
+        source.display_name(),
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(12.5),
+            color: if selected { p.accent } else { p.text_primary },
+            ..Default::default()
+        },
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(name_width);
+    painter.galley(
         egui::pos2(text_left, rect.top() + 11.0),
-        egui::Align2::LEFT_TOP,
-        ellipsize(&source.display_name(), name_budget),
-        egui::FontId::proportional(12.5),
-        if selected { p.accent } else { p.text_primary },
+        painter.layout_job(job),
+        egui::Color32::WHITE,
     );
 
     let (w, h) = source.info.display_size();
@@ -198,12 +207,21 @@ fn pending_row(ui: &mut Ui, p: &Palette, name: &str) {
         Stroke::new(1.0, p.divider),
         StrokeKind::Inside,
     );
-    painter.text(
-        egui::pos2(rect.left() + 12.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        format!("{} · {}", ellipsize(name, 30), tr("media.loading")),
-        egui::FontId::proportional(11.5),
-        p.text_muted,
+    // Same measured truncation as the real row: character counts misjudge CJK.
+    let mut job = egui::text::LayoutJob::single_section(
+        format!("{name} · {}", tr("media.loading")),
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(11.5),
+            color: p.text_muted,
+            ..Default::default()
+        },
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 24.0).max(24.0));
+    let galley = painter.layout_job(job);
+    painter.galley(
+        egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        egui::Color32::WHITE,
     );
 }
 
@@ -378,33 +396,6 @@ fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
-/// Truncates in the middle, always keeping the full extension.
-///
-/// Keeping the extension whole matters because it is how the user tells an
-/// `.mp4` from an `.mkv` in the source list.
-fn ellipsize(text: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max_chars {
-        return text.to_owned();
-    }
-
-    // A suffix longer than 6 chars is treated as part of the name, not an
-    // extension (e.g. "recording.2026-11-13-session").
-    let ext: &str = match text.rfind('.') {
-        Some(dot) if text.len() - dot <= 6 && dot > 0 => &text[dot..],
-        _ => "",
-    };
-
-    let ext_chars = ext.chars().count();
-    let budget = max_chars.saturating_sub(ext_chars + 1); // +1 for the ellipsis
-    if budget == 0 {
-        return format!("…{ext}");
-    }
-
-    let head: String = chars[..budget].iter().collect();
-    format!("{head}…{ext}")
-}
-
 /// The "no FFmpeg" card. Shown instead of the import hint when the engine is
 /// missing, because nothing else can work.
 pub fn engine_missing_card(ui: &mut Ui, p: &Palette, detail: Option<&str>) {
@@ -479,33 +470,5 @@ mod tests {
         assert_eq!(fmt_rate(900), "900 b/s");
         assert_eq!(fmt_rate(128_000), "128 kb/s");
         assert_eq!(fmt_rate(3_369_540), "3.4 Mb/s");
-    }
-
-    #[test]
-    fn ellipsize_keeps_the_whole_extension() {
-        let name = "a-very-long-file-name-that-goes-on-and-on-forever.mkv";
-        let short = ellipsize(name, 20);
-        assert_eq!(short.chars().count(), 20);
-        assert!(short.ends_with(".mkv"), "got {short}");
-        assert!(short.starts_with("a-very-long-fil…"));
-    }
-
-    #[test]
-    fn ellipsize_leaves_short_names_alone() {
-        assert_eq!(ellipsize("clip.mp4", 30), "clip.mp4");
-    }
-
-    #[test]
-    fn ellipsize_handles_names_without_extension() {
-        let short = ellipsize("a-very-long-name-without-any-dot-at-all", 16);
-        assert_eq!(short.chars().count(), 16);
-        assert!(short.ends_with('…'));
-    }
-
-    #[test]
-    fn ellipsize_does_not_mistake_long_suffix_for_an_extension() {
-        // After the last dot there are more than 6 chars, so it is part of the name.
-        let short = ellipsize("recording.2026-11-13-session", 14);
-        assert!(!short.ends_with("-session"), "got {short}");
     }
 }

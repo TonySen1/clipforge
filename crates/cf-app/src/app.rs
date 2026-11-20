@@ -483,17 +483,15 @@ impl ClipForgeApp {
 
         let has_clips = self.project.duration() > cf_core::Time::ZERO;
         let duration = self.duration();
-        let timecode = self.project.playhead.to_string();
 
         ui.allocate_ui(egui::vec2(ui.available_width(), preview_h), |ui| {
             match (&self.frame_texture, has_clips) {
-                (Some(texture), _) => widgets::preview::preview_frame(
-                    ui,
-                    &p,
-                    texture,
-                    self.frame_aspect,
-                    Some(&timecode),
-                ),
+                // No timecode overlay on the picture: the transport row directly
+                // below already shows position/duration, and a chip over the
+                // frame is just another thing covering the video.
+                (Some(texture), _) => {
+                    widgets::preview::preview_frame(ui, &p, texture, self.frame_aspect)
+                }
                 _ if has_clips && self.awaiting.is_some() => widgets::preview::preview_empty(
                     ui,
                     &p,
