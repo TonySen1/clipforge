@@ -26,10 +26,17 @@ pub enum Icon {
     VolumeMuted,
     Github,
     Capture,
+    Import,
+    Export,
+    Settings,
+    Info,
+    ThemeLight,
+    ThemeDark,
+    ThemeAuto,
 }
 
 impl Icon {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 21] = [
         Self::Split,
         Self::Razor,
         Self::Scissors,
@@ -44,6 +51,13 @@ impl Icon {
         Self::VolumeMuted,
         Self::Github,
         Self::Capture,
+        Self::Import,
+        Self::Export,
+        Self::Settings,
+        Self::Info,
+        Self::ThemeLight,
+        Self::ThemeDark,
+        Self::ThemeAuto,
     ];
 
     fn stem(self) -> &'static str {
@@ -62,6 +76,13 @@ impl Icon {
             Self::VolumeMuted => "volume-muted",
             Self::Github => "github",
             Self::Capture => "capture",
+            Self::Import => "import",
+            Self::Export => "export",
+            Self::Settings => "settings",
+            Self::Info => "info",
+            Self::ThemeLight => "theme-light",
+            Self::ThemeDark => "theme-dark",
+            Self::ThemeAuto => "theme-auto",
         }
     }
 
@@ -90,6 +111,21 @@ impl Icon {
             // 32 px one visibly stair-steps at this size.
             Self::Github => include_bytes!("../../../assets/icons/ui-png/github-64.png"),
             Self::Capture => include_bytes!("../../../assets/icons/ui-png/capture-32.png"),
+            // The iconfont set has fine detail (gear teeth, monitor bezel), so
+            // it is rasterised at 64 and downscaled at draw time.
+            Self::Import => include_bytes!("../../../assets/icons/ui-png/import-64.png"),
+            Self::Export => include_bytes!("../../../assets/icons/ui-png/export-64.png"),
+            Self::Settings => include_bytes!("../../../assets/icons/ui-png/settings-64.png"),
+            Self::Info => include_bytes!("../../../assets/icons/ui-png/info-64.png"),
+            Self::ThemeLight => {
+                include_bytes!("../../../assets/icons/ui-png/theme-light-64.png")
+            }
+            Self::ThemeDark => {
+                include_bytes!("../../../assets/icons/ui-png/theme-dark-64.png")
+            }
+            Self::ThemeAuto => {
+                include_bytes!("../../../assets/icons/ui-png/theme-auto-64.png")
+            }
         }
     }
 }

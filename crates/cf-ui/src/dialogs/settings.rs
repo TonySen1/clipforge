@@ -3,7 +3,7 @@
 use crate::i18n::tr;
 use crate::theme::{Metrics, Palette};
 use crate::widgets::controls::subtle_button;
-use cf_core::{CaptureFormat, Locale, Preferences, ThemeMode};
+use cf_core::{CaptureFormat, Locale, Preferences};
 use egui::{
     Align, Button, Color32, Context, Frame, Id, Margin, Modal, RichText, ScrollArea, Stroke, Ui,
 };
@@ -45,20 +45,9 @@ pub fn show(ctx: &Context, p: &Palette, prefs: &mut Preferences) -> SettingsActi
             ui.add_space(14.0);
 
             ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                section(ui, p, &tr("settings.appearance"));
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    for mode in ThemeMode::ALL {
-                        if option(ui, p, prefs.theme == mode, &tr(mode.i18n_key())).clicked() {
-                            prefs.theme = mode;
-                        }
-                    }
-                });
-
-                ui.add_space(16.0);
-                divider(ui, p);
-                ui.add_space(12.0);
-
+                // Colour mode moved to the toolbar, next to the settings
+                // button: it is changed often enough that a dialog round trip
+                // was friction.
                 section(ui, p, &tr("settings.language"));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {

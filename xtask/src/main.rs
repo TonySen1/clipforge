@@ -165,6 +165,49 @@ fn ui_icons() -> Result<()> {
     Ok(())
 }
 
+/// Rewrites every explicit `fill="..."` to white and adds a white root fill so
+/// paths without one inherit it. Leaves `fill="none"` alone: those shapes are
+/// stroke-only and must stay hollow.
+fn normalize_fills(svg: &str) -> String {
+    let mut out = String::with_capacity(svg.len());
+    let mut rest = svg;
+
+    while let Some(index) = rest.find("fill=\"") {
+        let (before, after_start) = rest.split_at(index);
+        out.push_str(before);
+        let value_start = &after_start["fill=\"".len()..];
+        match value_start.find('"') {
+            Some(end) => {
+                let value = &value_start[..end];
+                if value.eq_ignore_ascii_case("none") {
+                    out.push_str("fill=\"none\"");
+                } else {
+                    out.push_str("fill=\"#FFFFFF\"");
+                }
+                rest = &value_start[end + 1..];
+            }
+            None => {
+                out.push_str(after_start);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+
+    // Give the root a white fill so `<path>` elements without one are not
+    // rendered black.
+    if let Some(pos) = out.find("<svg") {
+        if let Some(close) = out[pos..].find('>') {
+            let open_end = pos + close;
+            if !out[pos..open_end].contains("fill=") {
+                out.insert_str(open_end, " fill=\"#FFFFFF\"");
+            }
+        }
+    }
+
+    out
+}
+
 /// Center-crops a square PNG and scales it to `size`, preserving alpha.
 ///
 /// Used for ready-made brand icons that must not be recoloured: the draw-time
@@ -196,14 +239,19 @@ fn resize_png(src: &Path, out: &Path, size: u32, as_mask: bool) -> Result<()> {
     Ok(())
 }
 
-/// Renders an SVG with `currentColor` forced to white, keeping alpha.
+/// Renders an SVG with every paint forced to white, keeping alpha.
 fn render_white(svg_path: &Path, out_path: &Path, size: u32) -> Result<()> {
     let data = std::fs::read_to_string(svg_path)
         .with_context(|| format!("reading {}", svg_path.display()))?;
 
     // `currentColor` has no inherited value outside a browser; substitute the
     // one the UI wants and let the tint provide the real color later.
-    let data = data.replace("currentColor", "#FFFFFF");
+    let mut data = data.replace("currentColor", "#FFFFFF");
+    // Iconfont exports either omit `fill` (SVG default is black) or bake in a
+    // grey. Both leave the texture un-tintable: `Mesh` multiplies the texel by
+    // the tint, so black stays black. The UI icons are monochrome by design,
+    // so every explicit fill becomes white too.
+    data = normalize_fills(&data);
 
     let tree = usvg::Tree::from_str(&data, &usvg::Options::default())
         .with_context(|| format!("parsing {}", svg_path.display()))?;

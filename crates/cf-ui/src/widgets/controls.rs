@@ -84,6 +84,70 @@ pub fn ghost_button(ui: &mut Ui, p: &Palette, label: impl Into<String>) -> Respo
     .inner
 }
 
+/// Icon-only button for the toolbar.
+///
+/// `selected` gives the accent treatment used by the theme picker; `enabled`
+/// greys the label out without hiding it, so the layout never shifts.
+pub fn icon_button(
+    ui: &mut Ui,
+    p: &Palette,
+    icons: &crate::icons::IconSet,
+    icon: crate::icons::Icon,
+    tooltip: &str,
+    selected: bool,
+    enabled: bool,
+) -> Response {
+    let size = egui::vec2(32.0, Metrics::CONTROL_HEIGHT);
+    // A disabled button must not report clicks, so it only senses hover.
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    let response = response.on_hover_text(tooltip);
+
+    let hovered = enabled && response.hovered();
+    let pressed = enabled && response.is_pointer_button_down_on();
+
+    if selected || hovered || pressed {
+        let fill = if selected || pressed {
+            p.accent_soft
+        } else {
+            p.bg_hover
+        };
+        ui.painter().rect_filled(rect, Metrics::RADIUS_SM_C, fill);
+    }
+
+    let color = if !enabled {
+        p.text_muted
+    } else if selected {
+        p.accent
+    } else if hovered {
+        p.text_primary
+    } else {
+        p.text_secondary
+    };
+
+    if let Some(texture) = icons.get(icon) {
+        let side = 19.0;
+        let image_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
+        let mut mesh = egui::Mesh::with_texture(texture.id());
+        mesh.add_rect_with_uv(
+            image_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            color,
+        );
+        ui.painter().add(egui::Shape::mesh(mesh));
+    }
+
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    response
+}
+
 /// A small pill/chip with a muted background, used for metadata.
 pub fn chip(ui: &mut Ui, p: &Palette, text: impl Into<String>) {
     let text = text.into();

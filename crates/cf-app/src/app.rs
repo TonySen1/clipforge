@@ -284,7 +284,7 @@ impl ClipForgeApp {
         app
     }
 
-    fn toolbar(&mut self, ui: &mut Ui) {
+    fn toolbar(&mut self, ctx: &Context, ui: &mut Ui) {
         let p = self.palette;
         ui.horizontal(|ui| {
             widgets::brand::brand(
@@ -296,23 +296,89 @@ impl ClipForgeApp {
             );
 
             ui.add_space(18.0);
-            if widgets::controls::primary_button(ui, &p, tr("toolbar.import")).clicked() {
+            // Import and export are icons now: the labels repeated what the
+            // icons say, and the toolbar reads calmer without them.
+            if widgets::controls::icon_button(
+                ui,
+                &p,
+                &self.icons,
+                cf_ui::icons::Icon::Import,
+                &tr("toolbar.import"),
+                false,
+                true,
+            )
+            .clicked()
+            {
                 self.pick_file();
             }
 
             let can_export = self.selected_clip.is_some() && self.export_running.is_none();
-            ui.add_enabled_ui(can_export, |ui| {
-                if widgets::controls::subtle_button(ui, &p, tr("toolbar.export")).clicked() {
-                    self.open_export();
-                }
-            });
+            if widgets::controls::icon_button(
+                ui,
+                &p,
+                &self.icons,
+                cf_ui::icons::Icon::Export,
+                &tr("toolbar.export"),
+                false,
+                can_export,
+            )
+            .clicked()
+            {
+                self.open_export();
+            }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if widgets::controls::ghost_button(ui, &p, tr("toolbar.about")).clicked() {
+                if widgets::controls::icon_button(
+                    ui,
+                    &p,
+                    &self.icons,
+                    cf_ui::icons::Icon::Info,
+                    &tr("toolbar.about"),
+                    false,
+                    true,
+                )
+                .clicked()
+                {
                     self.about_open = true;
                 }
-                if widgets::controls::ghost_button(ui, &p, tr("toolbar.settings")).clicked() {
+                if widgets::controls::icon_button(
+                    ui,
+                    &p,
+                    &self.icons,
+                    cf_ui::icons::Icon::Settings,
+                    &tr("toolbar.settings"),
+                    false,
+                    true,
+                )
+                .clicked()
+                {
                     self.settings_open = true;
+                }
+
+                // Theme lives beside the settings button: it is a display
+                // setting used often enough that opening a dialog for it is
+                // friction. One button showing the current mode, clicking
+                // cycles it, so the toolbar does not carry three icons.
+                ui.add_space(8.0);
+                let next_theme = self.prefs.theme.next();
+                let icon = match self.prefs.theme {
+                    cf_core::ThemeMode::Light => cf_ui::icons::Icon::ThemeLight,
+                    cf_core::ThemeMode::Dark => cf_ui::icons::Icon::ThemeDark,
+                    cf_core::ThemeMode::System => cf_ui::icons::Icon::ThemeAuto,
+                };
+                let tooltip = format!(
+                    "{}: {} → {}",
+                    tr("settings.theme"),
+                    tr(self.prefs.theme.i18n_key()),
+                    tr(next_theme.i18n_key())
+                );
+                if widgets::controls::icon_button(ui, &p, &self.icons, icon, &tooltip, false, true)
+                    .clicked()
+                {
+                    self.prefs.theme = next_theme;
+                    // Re-applies the palette and persists; the toolbar redraws
+                    // in the new theme on the same frame.
+                    self.apply_preferences(ctx, None);
                 }
 
                 // Preview quality belongs with the other view settings on the
@@ -2109,7 +2175,7 @@ impl eframe::App for ClipForgeApp {
                     .stroke(Stroke::new(1.0, p.divider))
                     .inner_margin(Margin::symmetric(14, 8)),
             )
-            .show(ui, |ui| self.toolbar(ui));
+            .show(ui, |ui| self.toolbar(&ctx, ui));
 
         Panel::bottom("clipforge_status")
             .exact_size(Metrics::STATUS_HEIGHT)

@@ -79,6 +79,18 @@ impl ThemeMode {
             Self::System => "theme.system",
         }
     }
+
+    /// The mode a click on the single theme button switches to.
+    ///
+    /// Light → Dark → System → Light: the two explicit modes are what people
+    /// reach for, with "follow the system" as the third stop.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Light => Self::Dark,
+            Self::Dark => Self::System,
+            Self::System => Self::Light,
+        }
+    }
 }
 
 /// UI language. The string forms are persisted in preferences.
@@ -275,6 +287,16 @@ mod tests {
         prefs.save_to(&path).unwrap();
         assert_eq!(Preferences::load_from(&path).unwrap(), prefs);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn theme_cycles_light_dark_system() {
+        assert_eq!(ThemeMode::Light.next(), ThemeMode::Dark);
+        assert_eq!(ThemeMode::Dark.next(), ThemeMode::System);
+        assert_eq!(ThemeMode::System.next(), ThemeMode::Light);
+        // Three clicks return to the starting point.
+        let start = ThemeMode::System;
+        assert_eq!(start.next().next().next(), start);
     }
 
     #[test]
