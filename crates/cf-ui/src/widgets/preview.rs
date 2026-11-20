@@ -33,8 +33,8 @@ pub fn preview_empty(ui: &mut Ui, p: &Palette, empty_title: &str, empty_hint: &s
         StrokeKind::Inside,
     );
 
-    // The well is near-black in both themes, so the empty state always uses
-    // on-dark text rather than the theme's panel text tokens.
+    // The well is black in dark mode and light grey in light mode, so the
+    // empty state uses the `on_stage_*` pair, which flips with it.
     let icon_center = pos2(stage.center().x, stage.center().y - 18.0);
     draw_empty_badge(painter, p, icon_center, 62.0);
 
@@ -82,7 +82,8 @@ pub fn preview_frame(
     let stage = fit_16_9(rect);
     let image = fit_aspect(stage, frame_aspect);
 
-    // Black behind the image so pillarbox/letterbox bars read intentionally.
+    // The well sits behind the image so pillarbox/letterbox bars read
+    // intentionally: black in dark mode, a neutral light grey in light mode.
     painter.rect_filled(stage, Metrics::RADIUS_MD_C, p.bg_stage_inset);
     painter.add(egui::Shape::image(
         texture.id(),

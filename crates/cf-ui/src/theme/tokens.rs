@@ -44,8 +44,11 @@ pub struct Palette {
     pub bg_hover: Color32,
     /// Outer preview surface. Follows the theme so the chrome stays cohesive.
     pub bg_stage: Color32,
-    /// The 16:9 frame well. Deliberately near-black in both themes: video is
-    /// judged against black, and a light well around a dark clip reads broken.
+    /// The 16:9 frame well behind the image.
+    ///
+    /// Near-black in dark mode so letterbox bars read as part of the player.
+    /// In light mode it is a flat light grey: a black slab punched into a white
+    /// panel looks like a rendering fault, which is exactly how it read.
     pub bg_stage_inset: Color32,
     pub track_bg: Color32,
 
@@ -75,9 +78,11 @@ pub struct Palette {
     pub error: Color32,
     pub success: Color32,
 
-    // Scrims and text that sits on the always-dark stage or stage overlay.
-    // These are deliberately identical in both themes: the stage is dark even
-    // in light mode, so on-stage text must not follow the panel palette.
+    // Scrims and text that sits on the stage.
+    //
+    // The scrims stay dark in both themes because they are translucent veils
+    // over arbitrary content. On-stage text, however, follows `bg_stage_inset`:
+    // light grey well -> dark text, black well -> light text.
     pub scrim_modal: Color32,
     pub scrim_overlay: Color32,
     pub scrim_chip: Color32,
@@ -103,7 +108,9 @@ impl Palette {
         bg_sunken: Color32::from_rgb(0xE4, 0xE8, 0xEF),
         bg_hover: Color32::from_rgb(0xFF, 0xFF, 0xFF),
         bg_stage: Color32::from_rgb(0xDF, 0xE5, 0xEE),
-        bg_stage_inset: Color32::from_rgb(0x08, 0x0B, 0x11),
+        // 232,232,232: neutral, so the empty state reads as "no video yet"
+        // rather than a hole in the panel.
+        bg_stage_inset: Color32::from_rgb(0xE8, 0xE8, 0xE8),
         track_bg: Color32::from_rgb(0xE9, 0xED, 0xF4),
         text_primary: Color32::from_rgb(0x16, 0x1B, 0x22),
         text_secondary: Color32::from_rgb(0x57, 0x60, 0x6C),
@@ -130,8 +137,9 @@ impl Palette {
         scrim_overlay: Color32::from_rgba_unmultiplied_const(0x00, 0x00, 0x00, 150),
         scrim_chip: Color32::from_rgba_unmultiplied_const(0x00, 0x00, 0x00, 150),
         shadow: Color32::from_rgba_unmultiplied_const(0x00, 0x00, 0x00, 90),
-        on_stage_primary: Color32::from_rgb(0xC8, 0xD3, 0xE2),
-        on_stage_muted: Color32::from_rgb(0x74, 0x81, 0x94),
+        // The light well is ~232 grey, so on-stage text has to be dark.
+        on_stage_primary: Color32::from_rgb(0x33, 0x3B, 0x46),
+        on_stage_muted: Color32::from_rgb(0x6B, 0x74, 0x82),
         on_clip: Color32::from_rgb(0x1A, 0x2A, 0x3D),
         progress_highlight: Color32::from_rgba_unmultiplied_const(0xFF, 0xFF, 0xFF, 38),
         progress_stripe: Color32::from_rgba_unmultiplied_const(0xFF, 0xFF, 0xFF, 46),
