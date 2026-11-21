@@ -70,9 +70,6 @@ pub enum PreviewEvent {
         frame: Frame,
         size: PreviewSize,
         playing: bool,
-        /// A keyframe-strip stand-in: shown immediately while the exact frame
-        /// decodes. The UI must not treat it as the answer to the request.
-        provisional: bool,
     },
     Failed {
         generation: u64,
@@ -117,14 +114,12 @@ impl PreviewWorker {
                     frame,
                     size,
                     playing,
-                    provisional,
                 }) => {
                     newest_frame = Some(IncomingFrame {
                         generation,
                         frame,
                         size,
                         playing,
-                        provisional,
                     });
                 }
                 Ok(PreviewEvent::Failed { generation, detail }) => {
@@ -149,8 +144,6 @@ pub struct IncomingFrame {
     pub frame: Frame,
     pub size: PreviewSize,
     pub playing: bool,
-    /// Strip stand-in: draw it, but keep waiting for the real frame.
-    pub provisional: bool,
 }
 
 pub struct DrainedEvents {
@@ -189,8 +182,37 @@ fn run_loop(rx: Receiver<PreviewRequest>, event_tx: Sender<PreviewEvent>, ctx: e
     // Survives across seeks: scrubbing revisits neighbours constantly, and a
     // hit avoids starting an FFmpeg process entirely.
     let mut cache = FrameCache::default();
+    // Requests read from the channel before they are handled. Keeping them
+    // here (rather than handling straight from `recv`) lets the loop see what
+    // else is waiting and skip Seek requests a newer one has superseded.
+    let mut pending: std::collections::VecDeque<PreviewRequest> = std::collections::VecDeque::new();
 
-    while let Ok(request) = rx.recv() {
+    loop {
+        let request = match pending.pop_front() {
+            Some(request) => request,
+            None => match rx.recv() {
+                Ok(request) => request,
+                Err(_) => break,
+            },
+        };
+        // Pull in everything already queued so the staleness check below is
+        // accurate. A drag produces one Seek per pointer move.
+        while let Ok(request) = rx.try_recv() {
+            pending.push_back(request);
+        }
+
+        // A seek is stale when a newer seek is already waiting behind it;
+        // decoding it would only delay the position the user actually wants.
+        if let PreviewRequest::Seek { generation, .. } = &request {
+            let superseded = pending.iter().any(|queued| {
+                matches!(queued, PreviewRequest::Seek { generation: newer, .. } if newer > generation)
+            });
+            if superseded {
+                log::debug!("skipping stale seek {generation}");
+                continue;
+            }
+        }
+
         match request {
             PreviewRequest::Shutdown => {
                 if let Some(playback) = playback.take() {
@@ -258,40 +280,14 @@ fn run_loop(rx: Receiver<PreviewRequest>, event_tx: Sender<PreviewEvent>, ctx: e
                         frame,
                         size: active.size,
                         playing: false,
-                        provisional: false,
                     });
                     ctx.request_repaint();
                     continue;
                 }
 
-                // Fast seeks are scrubbing: show the nearest keyframe right
-                // away so the picture tracks the pointer, then decode the
-                // exact frame below and replace it. Precise seeks (frame
-                // stepping, release) skip this so the still never flickers
-                // backwards.
-                if !precise {
-                    if let Some(strip) = &active.thumbs {
-                        log::debug!(
-                            "seek {}: strip has {} frames, nearest at {:?}",
-                            time,
-                            strip.len(),
-                            strip.at_or_before(time).map(|frame| frame.time)
-                        );
-                        if let Some(frame) = strip.at_or_before(time) {
-                            let _ = event_tx.send(PreviewEvent::Frame {
-                                generation,
-                                frame: frame.clone(),
-                                size: PreviewSize {
-                                    width: frame.width,
-                                    height: frame.height,
-                                },
-                                playing: false,
-                                provisional: true,
-                            });
-                            ctx.request_repaint();
-                        }
-                    }
-                }
+                // The strip frame for a scrub is painted by the app directly, so
+                // this worker only has to produce the exact frame. Precise
+                // seeks (frame stepping, release) take the same path.
 
                 match decode_frame(
                     &active.install,
@@ -308,7 +304,6 @@ fn run_loop(rx: Receiver<PreviewRequest>, event_tx: Sender<PreviewEvent>, ctx: e
                             frame,
                             size: active.size,
                             playing: false,
-                            provisional: false,
                         });
                     }
                     Err(err) => {
@@ -391,7 +386,6 @@ fn playback_thread(
                         frame,
                         size,
                         playing: true,
-                        provisional: false,
                     })
                     .is_err()
                 {
@@ -431,55 +425,48 @@ mod tests {
 
     const FPS30: FrameRate = FrameRate { num: 30, den: 1 };
 
-    /// Drives a real worker: a non-precise seek must emit the strip frame
-    /// before the decoded one, so the picture updates immediately.
+    /// Drives a real worker: a burst of seeks must be coalesced to the newest,
+    /// so scrubbing never waits behind decodes the user has moved past.
     #[test]
     #[ignore = "requires a real FFmpeg and the sample fixture"]
-    fn non_precise_seek_emits_the_strip_frame_first() {
-        use cf_core::media::{discover, keyframes, probe, thumbs};
+    fn queued_seeks_are_coalesced_to_the_newest() {
+        use cf_core::media::{discover, probe};
 
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/media/sample_h264.mp4");
         let (install, _) = discover(None).expect("FFmpeg is required");
         let install = Arc::new(install);
         let info = Arc::new(probe::probe(&install, &fixture).expect("probe"));
-        let index = keyframes::probe(&install, &fixture).expect("keyframes");
-        let strip = thumbs::build(
-            &install,
-            &fixture,
-            &info,
-            &index,
-            thumbs::STRIP_MAX_EDGE,
-            thumbs::STRIP_BUDGET_BYTES,
-        )
-        .expect("strip");
-        assert!(!strip.is_empty(), "fixture must yield a strip");
 
         let worker = PreviewWorker::spawn(egui::Context::default());
         worker.send(PreviewRequest::Source {
             id: SourceId(1),
-            install: install.clone(),
-            path: fixture.clone(),
-            info: info.clone(),
+            install,
+            path: fixture,
+            info,
             max_edge: 360,
-            thumbs: Some(Arc::new(strip)),
-        });
-        worker.send(PreviewRequest::Seek {
-            generation: 7,
-            time: Time::from_secs(1.5),
-            precise: false,
+            thumbs: None,
         });
 
-        let mut saw_provisional = false;
-        let mut saw_exact = false;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while std::time::Instant::now() < deadline && !saw_exact {
+        // A drag: one seek per pointer move, generations only ever increase.
+        // The worker must answer the last one and skip the rest, otherwise the
+        // picture lags behind the pointer by every queued decode.
+        const SEEK_COUNT: u64 = 12;
+        for generation in 1..=SEEK_COUNT {
+            worker.send(PreviewRequest::Seek {
+                generation,
+                time: Time::from_micros(200_000 * generation as i64),
+                precise: false,
+            });
+        }
+
+        let mut answered = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while std::time::Instant::now() < deadline {
             if let Some(frame) = worker.drain().newest_frame {
-                assert_eq!(frame.generation, 7);
-                if frame.provisional {
-                    saw_provisional = true;
-                } else {
-                    saw_exact = true;
+                answered.push(frame.generation);
+                if frame.generation == SEEK_COUNT {
+                    break;
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -487,10 +474,14 @@ mod tests {
 
         worker.send(PreviewRequest::Shutdown);
 
-        assert!(saw_exact, "the precise frame never arrived");
+        assert_eq!(
+            answered.last().copied(),
+            Some(SEEK_COUNT),
+            "the newest seek must be answered, got {answered:?}"
+        );
         assert!(
-            saw_provisional,
-            "the strip frame should be emitted before the decode finishes"
+            answered.len() < SEEK_COUNT as usize,
+            "stale seeks should be skipped, but every one was decoded: {answered:?}"
         );
     }
 

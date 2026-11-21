@@ -136,6 +136,10 @@ pub struct ClipForgeApp {
     /// Current frame texture. Recreated when the frame size changes.
     frame_texture: Option<TextureHandle>,
     frame_aspect: f32,
+    /// Keyframe frame to paint on the next repaint, set when a scrub begins.
+    /// Applied at the top of the frame so the texture is never touched from
+    /// outside egui's update cycle.
+    pending_strip_frame: Option<cf_core::media::Frame>,
     /// Bumped on every request so stale frames can be dropped.
     preview_generation: u64,
     /// Generation the UI is currently waiting for; `None` means idle.
@@ -247,6 +251,7 @@ impl ClipForgeApp {
             preview: PreviewWorker::spawn(cc.egui_ctx.clone()),
             frame_texture: None,
             frame_aspect: 16.0 / 9.0,
+            pending_strip_frame: None,
             preview_generation: 0,
             awaiting: None,
             playing_preview: false,
@@ -600,6 +605,20 @@ impl ClipForgeApp {
             // and blanking it here made the preview flash its empty state.
         }
 
+        // Show the nearest keyframe into the texture *here*, not through the
+        // worker: the worker decodes serially, so a queued request would only be
+        // answered after the previous decode finished. Doing it in the app makes
+        // the picture track the pointer at frame rate; the sharp frame lands
+        // later and replaces it.
+        if !precise {
+            if let Some(frame) = source
+                .thumbs()
+                .and_then(|strip| strip.at_or_before(source_time))
+            {
+                self.pending_strip_frame = Some(frame.clone());
+            }
+        }
+
         self.preview_generation += 1;
         let generation = self.preview_generation;
         self.awaiting = Some(generation);
@@ -751,7 +770,6 @@ impl ClipForgeApp {
             frame,
             size,
             playing,
-            provisional,
         } = incoming;
 
         // Drop frames from superseded requests.
@@ -761,11 +779,7 @@ impl ClipForgeApp {
             _ => {}
         }
 
-        // A strip stand-in is shown but does not answer the request: the exact
-        // frame is still being decoded and must be accepted when it lands.
-        if !provisional {
-            self.awaiting = None;
-        }
+        self.awaiting = None;
 
         if playing {
             // First frame of this playback run: the picture is now on screen,
@@ -829,11 +843,18 @@ impl ClipForgeApp {
             return;
         }
 
-        let image = egui::ColorImage::from_rgba_unmultiplied(
-            [size.width as usize, size.height as usize],
-            &frame.rgba,
-        );
-        let wanted = [size.width as usize, size.height as usize];
+        self.upload_frame(ctx, &frame.rgba, size.width as usize, size.height as usize);
+
+        if playing {
+            // `-re` paces frames; keep draining without waiting for input.
+            ctx.request_repaint();
+        }
+    }
+
+    /// Uploads RGBA pixels into the preview texture, resizing it if needed.
+    fn upload_frame(&mut self, ctx: &egui::Context, rgba: &[u8], width: usize, height: usize) {
+        let image = egui::ColorImage::from_rgba_unmultiplied([width, height], rgba);
+        let wanted = [width, height];
 
         match &mut self.frame_texture {
             Some(texture) if texture.size() == wanted => {
@@ -843,11 +864,6 @@ impl ClipForgeApp {
                 self.frame_texture =
                     Some(ctx.load_texture("clipforge_frame", image, egui::TextureOptions::LINEAR));
             }
-        }
-
-        if playing {
-            // `-re` paces frames; keep draining without waiting for input.
-            ctx.request_repaint();
         }
     }
 
@@ -2243,6 +2259,21 @@ impl eframe::App for ClipForgeApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_imports();
+        // A scrub paints the nearest keyframe before anything else this frame;
+        // the exact frame, when it lands, replaces it.
+        if let Some(frame) = self.pending_strip_frame.take() {
+            self.frame_aspect = if frame.height > 0 {
+                frame.width as f32 / frame.height as f32
+            } else {
+                16.0 / 9.0
+            };
+            self.upload_frame(
+                &ctx,
+                &frame.rgba,
+                frame.width as usize,
+                frame.height as usize,
+            );
+        }
         self.poll_preview(&ctx);
         self.poll_export();
         self.poll_update();
