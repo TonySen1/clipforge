@@ -16,7 +16,8 @@
 
 use crate::frame_cache::FrameCache;
 use cf_core::media::{
-    decode_frame, preview_size, FfmpegInstall, Frame, MediaInfo, PlaybackProcess, PreviewSize,
+    decode_frame, preview_size, FfmpegInstall, Frame, KeyframeStrip, MediaInfo, PlaybackProcess,
+    PreviewSize,
 };
 use cf_core::time::Time;
 use cf_core::SourceId;
@@ -48,6 +49,13 @@ pub enum PreviewRequest {
         path: PathBuf,
         info: Arc<MediaInfo>,
         max_edge: u32,
+        /// Scrub strip, when one has been decoded for this source.
+        thumbs: Option<Arc<KeyframeStrip>>,
+    },
+    /// The scrub strip finished decoding after the source was set.
+    Thumbs {
+        id: SourceId,
+        strip: Arc<KeyframeStrip>,
     },
     /// Drops cached frames, e.g. after the preview quality changed.
     ClearCache,
@@ -62,6 +70,9 @@ pub enum PreviewEvent {
         frame: Frame,
         size: PreviewSize,
         playing: bool,
+        /// A keyframe-strip stand-in: shown immediately while the exact frame
+        /// decodes. The UI must not treat it as the answer to the request.
+        provisional: bool,
     },
     Failed {
         generation: u64,
@@ -106,7 +117,16 @@ impl PreviewWorker {
                     frame,
                     size,
                     playing,
-                }) => newest_frame = Some((generation, frame, size, playing)),
+                    provisional,
+                }) => {
+                    newest_frame = Some(IncomingFrame {
+                        generation,
+                        frame,
+                        size,
+                        playing,
+                        provisional,
+                    });
+                }
                 Ok(PreviewEvent::Failed { generation, detail }) => {
                     failures.push((generation, detail));
                 }
@@ -123,8 +143,18 @@ impl PreviewWorker {
     }
 }
 
+/// One frame on its way to the UI.
+pub struct IncomingFrame {
+    pub generation: u64,
+    pub frame: Frame,
+    pub size: PreviewSize,
+    pub playing: bool,
+    /// Strip stand-in: draw it, but keep waiting for the real frame.
+    pub provisional: bool,
+}
+
 pub struct DrainedEvents {
-    pub newest_frame: Option<(u64, Frame, PreviewSize, bool)>,
+    pub newest_frame: Option<IncomingFrame>,
     pub failures: Vec<(u64, String)>,
     pub finished: bool,
 }
@@ -135,6 +165,7 @@ struct ActiveSource {
     path: PathBuf,
     info: Arc<MediaInfo>,
     size: PreviewSize,
+    thumbs: Option<Arc<KeyframeStrip>>,
 }
 
 /// A running playback thread.
@@ -173,6 +204,7 @@ fn run_loop(rx: Receiver<PreviewRequest>, event_tx: Sender<PreviewEvent>, ctx: e
                 path,
                 info,
                 max_edge,
+                thumbs,
             } => {
                 if let Some(playback) = playback.take() {
                     playback.stop();
@@ -184,7 +216,18 @@ fn run_loop(rx: Receiver<PreviewRequest>, event_tx: Sender<PreviewEvent>, ctx: e
                     path,
                     info,
                     size,
+                    thumbs,
                 });
+            }
+            PreviewRequest::Thumbs { id, strip } => {
+                // Only meaningful when it belongs to the source in use; a strip
+                // for a source the worker moved away from would never be asked
+                // for and is dropped.
+                if let Some(active) = &mut source {
+                    if active.id == id {
+                        active.thumbs = Some(strip);
+                    }
+                }
             }
             PreviewRequest::ClearCache => {
                 cache.clear();
@@ -215,9 +258,39 @@ fn run_loop(rx: Receiver<PreviewRequest>, event_tx: Sender<PreviewEvent>, ctx: e
                         frame,
                         size: active.size,
                         playing: false,
+                        provisional: false,
                     });
                     ctx.request_repaint();
                     continue;
+                }
+
+                // Fast seeks are scrubbing: show the nearest keyframe right
+                // away so the picture tracks the pointer, then decode the
+                // exact frame below and replace it. Precise seeks (frame
+                // stepping, release) skip this so the still never flickers
+                // backwards.
+                if !precise {
+                    if let Some(strip) = &active.thumbs {
+                        log::debug!(
+                            "seek {}: strip has {} frames, nearest at {:?}",
+                            time,
+                            strip.len(),
+                            strip.at_or_before(time).map(|frame| frame.time)
+                        );
+                        if let Some(frame) = strip.at_or_before(time) {
+                            let _ = event_tx.send(PreviewEvent::Frame {
+                                generation,
+                                frame: frame.clone(),
+                                size: PreviewSize {
+                                    width: frame.width,
+                                    height: frame.height,
+                                },
+                                playing: false,
+                                provisional: true,
+                            });
+                            ctx.request_repaint();
+                        }
+                    }
                 }
 
                 match decode_frame(
@@ -235,6 +308,7 @@ fn run_loop(rx: Receiver<PreviewRequest>, event_tx: Sender<PreviewEvent>, ctx: e
                             frame,
                             size: active.size,
                             playing: false,
+                            provisional: false,
                         });
                     }
                     Err(err) => {
@@ -317,6 +391,7 @@ fn playback_thread(
                         frame,
                         size,
                         playing: true,
+                        provisional: false,
                     })
                     .is_err()
                 {
@@ -355,6 +430,69 @@ mod tests {
     use cf_core::FrameRate;
 
     const FPS30: FrameRate = FrameRate { num: 30, den: 1 };
+
+    /// Drives a real worker: a non-precise seek must emit the strip frame
+    /// before the decoded one, so the picture updates immediately.
+    #[test]
+    #[ignore = "requires a real FFmpeg and the sample fixture"]
+    fn non_precise_seek_emits_the_strip_frame_first() {
+        use cf_core::media::{discover, keyframes, probe, thumbs};
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/media/sample_h264.mp4");
+        let (install, _) = discover(None).expect("FFmpeg is required");
+        let install = Arc::new(install);
+        let info = Arc::new(probe::probe(&install, &fixture).expect("probe"));
+        let index = keyframes::probe(&install, &fixture).expect("keyframes");
+        let strip = thumbs::build(
+            &install,
+            &fixture,
+            &info,
+            &index,
+            thumbs::STRIP_MAX_EDGE,
+            thumbs::STRIP_BUDGET_BYTES,
+        )
+        .expect("strip");
+        assert!(!strip.is_empty(), "fixture must yield a strip");
+
+        let worker = PreviewWorker::spawn(egui::Context::default());
+        worker.send(PreviewRequest::Source {
+            id: SourceId(1),
+            install: install.clone(),
+            path: fixture.clone(),
+            info: info.clone(),
+            max_edge: 360,
+            thumbs: Some(Arc::new(strip)),
+        });
+        worker.send(PreviewRequest::Seek {
+            generation: 7,
+            time: Time::from_secs(1.5),
+            precise: false,
+        });
+
+        let mut saw_provisional = false;
+        let mut saw_exact = false;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline && !saw_exact {
+            if let Some(frame) = worker.drain().newest_frame {
+                assert_eq!(frame.generation, 7);
+                if frame.provisional {
+                    saw_provisional = true;
+                } else {
+                    saw_exact = true;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        worker.send(PreviewRequest::Shutdown);
+
+        assert!(saw_exact, "the precise frame never arrived");
+        assert!(
+            saw_provisional,
+            "the strip frame should be emitted before the decode finishes"
+        );
+    }
 
     #[test]
     fn snaps_to_nearest_frame() {

@@ -592,6 +592,7 @@ impl ClipForgeApp {
                 path: source.path().clone(),
                 info: source.info.clone(),
                 max_edge: self.preview_max_edge(),
+                thumbs: source.thumbs.clone(),
             });
             self.preview_source = Some(source_id);
             // The old texture stays on screen until the new frame arrives; it
@@ -626,6 +627,7 @@ impl ClipForgeApp {
                     path: source.path().clone(),
                     info: source.info.clone(),
                     max_edge: self.preview_max_edge(),
+                    thumbs: source.thumbs.clone(),
                 });
                 self.preview_source = Some(source_id);
             }
@@ -741,9 +743,16 @@ impl ClipForgeApp {
             self.project.set_playhead(self.duration());
         }
 
-        let Some((generation, frame, size, playing)) = drained.newest_frame else {
+        let Some(incoming) = drained.newest_frame else {
             return;
         };
+        let crate::preview::IncomingFrame {
+            generation,
+            frame,
+            size,
+            playing,
+            provisional,
+        } = incoming;
 
         // Drop frames from superseded requests.
         match self.awaiting {
@@ -752,7 +761,11 @@ impl ClipForgeApp {
             _ => {}
         }
 
-        self.awaiting = None;
+        // A strip stand-in is shown but does not answer the request: the exact
+        // frame is still being decoded and must be accepted when it lands.
+        if !provisional {
+            self.awaiting = None;
+        }
 
         if playing {
             // First frame of this playback run: the picture is now on screen,
@@ -2092,6 +2105,27 @@ impl ClipForgeApp {
                     }
                     self.request_seek(false);
                     self.notify(StatusMessage::Imported(name));
+                }
+                ImportEvent::Thumbs { source_id, strip } => {
+                    // Attach to the live source so the preview worker can use
+                    // it; nothing else in the project changes.
+                    let strip = std::sync::Arc::new(strip);
+                    if let Some(source) = self
+                        .project
+                        .sources
+                        .iter_mut()
+                        .find(|source| source.id == source_id)
+                    {
+                        source.thumbs = Some(strip.clone());
+                    }
+                    // Hand it to the worker too, unless it is already pointed
+                    // at another source (that copy is simply unused).
+                    if self.preview_source == Some(source_id) {
+                        self.preview.send(PreviewRequest::Thumbs {
+                            id: source_id,
+                            strip,
+                        });
+                    }
                 }
                 ImportEvent::Failed { path, error } => {
                     let name = file_label(&path);

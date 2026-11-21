@@ -6,7 +6,7 @@
 //! polls.
 
 use cf_core::domain::{MediaSource, SourceId};
-use cf_core::media::{ffmpeg, keyframes, probe, DiscoverySource, FfmpegInstall};
+use cf_core::media::{ffmpeg, keyframes, probe, thumbs, DiscoverySource, FfmpegInstall};
 use cf_core::CoreError;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -24,6 +24,12 @@ pub enum ImportEvent {
     Metadata {
         source: MediaSource,
         keyframe_warning: Option<String>,
+    },
+    /// The scrub strip finished decoding. Sent separately so the source shows
+    /// up in the list immediately instead of waiting for the extra pass.
+    Thumbs {
+        source_id: cf_core::SourceId,
+        strip: cf_core::media::KeyframeStrip,
     },
     Failed {
         path: PathBuf,
@@ -124,12 +130,43 @@ impl ImportWorker {
                                     Some(err.detail()),
                                 ),
                             };
+                            // Cheap `Arc` clones so the strip can be built after
+                            // the source itself has been handed to the UI.
+                            let strip_info = source.info.clone();
+                            let strip_keyframes = source.keyframes.clone();
 
                             let _ = event_tx.send(ImportEvent::Metadata {
                                 source,
                                 keyframe_warning: warning,
                             });
                             ctx.request_repaint();
+
+                            // The strip is a second pass over the file. It is
+                            // sent separately so the source appears at once; a
+                            // failure here only costs the instant scrub preview.
+                            let strip = thumbs::build(
+                                &install,
+                                &path,
+                                &strip_info,
+                                &strip_keyframes,
+                                thumbs::STRIP_MAX_EDGE,
+                                thumbs::STRIP_BUDGET_BYTES,
+                            );
+                            match strip {
+                                Ok(strip) if !strip.is_empty() => {
+                                    let _ = event_tx.send(ImportEvent::Thumbs {
+                                        source_id: SourceId(next_id),
+                                        strip,
+                                    });
+                                    ctx.request_repaint();
+                                }
+                                Ok(_) => {}
+                                Err(err) => log::warn!(
+                                    "keyframe strip for {} failed: {}",
+                                    path.display(),
+                                    err.detail()
+                                ),
+                            }
                         }
                     }
                 }

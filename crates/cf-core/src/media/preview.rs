@@ -97,7 +97,7 @@ fn to_even(value: f64) -> u32 {
 /// The transpose filters bake rotation into the pixels; a 90/270 rotation also
 /// means the scale target is swapped, which `preview_size` already accounts
 /// for.
-fn video_filter(info: &MediaInfo, size: PreviewSize) -> String {
+pub(crate) fn video_filter(info: &MediaInfo, size: PreviewSize) -> String {
     let transpose = match info.video.rotation.rem_euclid(360) {
         90 => "transpose=clock",
         180 => "transpose=clock,transpose=clock",

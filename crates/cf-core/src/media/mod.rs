@@ -12,6 +12,7 @@ pub mod keyframes;
 pub mod preview;
 pub mod probe;
 pub mod progress;
+pub mod thumbs;
 
 pub use audio::{AudioBuffer, CHANNELS, SAMPLE_RATE};
 pub use capture::{capture_frame, capture_path, ImageFormat, DEFAULT_SUFFIX};
@@ -26,3 +27,4 @@ pub use preview::{
     decode_frame, preview_size, Frame, PlaybackProcess, PreviewSize, MAX_PREVIEW_EDGE,
 };
 pub use probe::{AudioStream, ContainerInfo, MediaInfo, VideoStream};
+pub use thumbs::{KeyframeStrip, STRIP_BUDGET_BYTES, STRIP_MAX_EDGE};
