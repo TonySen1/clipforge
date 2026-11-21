@@ -1,9 +1,10 @@
 //! Audio output for preview playback.
 //!
-//! Design: the whole audio span is decoded up front (see
-//! `cf_core::media::audio`) and handed to a cpal output stream. The callback
-//! only copies samples from that buffer and advances a shared cursor, which
-//! keeps it allocation-free and lock-light — cpal's callback must never block.
+//! Design: decoding runs on a worker thread in **bounded chunks** (see
+//! [`AudioWorker`]) and reaches this module as fully decoded PCM. The output
+//! callback only copies samples from the queued buffers and advances a shared
+//! cursor, which keeps it allocation-free and lock-light — cpal's callback must
+//! never block.
 //!
 //! Synchronisation is *cursor-driven*: video playback asks the audio layer
 //! where it is, rather than the other way round. Audio is the more reliable
@@ -14,18 +15,23 @@
 //! keeps working silently instead of failing to start.
 
 use cf_core::media::audio::{AudioBuffer, CHANNELS, SAMPLE_RATE};
+use cf_core::media::FfmpegInstall;
 use cf_core::time::Time;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 
 /// Shared between the UI/business side and the audio callback.
 struct Shared {
-    /// Decoded PCM. Swapped wholesale when the playhead moves.
-    buffer: Mutex<AudioBuffer>,
-    /// Playback position in frames, relative to `buffer.start`.
+    /// Decoded PCM, played front to back. A chunk boundary is a plain
+    /// `pop_front`, so playback continues seamlessly as long as the next chunk
+    /// was prefetched.
+    buffers: Mutex<VecDeque<AudioBuffer>>,
+    /// Playback position in frames, relative to `buffers.front().start`.
     cursor: AtomicU64,
-    /// Frames already played past the end, so the callback can detect the end.
+    /// True while the callback should advance (and emit sound).
     playing: AtomicBool,
     /// 0..=1000, applied per sample.
     volume: AtomicBelt,
@@ -34,12 +40,12 @@ struct Shared {
 }
 
 /// `AtomicU32` wrapper with a name that says what it stores.
-type AtomicBelt = std::sync::atomic::AtomicU32;
+type AtomicBelt = AtomicU32;
 
 impl Shared {
     fn new() -> Self {
         Self {
-            buffer: Mutex::new(AudioBuffer::default()),
+            buffers: Mutex::new(VecDeque::new()),
             cursor: AtomicU64::new(0),
             playing: AtomicBool::new(false),
             volume: AtomicBelt::new(1000),
@@ -116,34 +122,60 @@ impl AudioEngine {
         self.unavailable.as_deref()
     }
 
-    /// Replaces the buffer and positions the cursor at `at`.
+    /// Queues a decoded chunk.
     ///
-    /// The cursor is set from a timeline position so a seek during playback
-    /// resumes from exactly where the picture is.
-    pub fn load(&self, buffer: AudioBuffer) {
-        let start = buffer.start;
-        let cursor = buffer.frame_at(start).unwrap_or(0) as u64;
+    /// Chunks arrive in timeline order with a prefetch of several seconds, so
+    /// the callback can simply move to the next one when the current runs out.
+    /// A chunk that starts *before* the queued audio is treated as a seek: the
+    /// queue is dropped so stale audio never plays after jumping backwards.
+    pub fn push(&self, buffer: AudioBuffer) {
+        let Ok(mut buffers) = self.shared.buffers.lock() else {
+            return;
+        };
 
-        if let Ok(mut slot) = self.shared.buffer.lock() {
-            *slot = buffer;
+        // A chunk that starts before what is queued means the user seeked
+        // backwards: the old audio would play over the new position.
+        let backwards = buffers.back().is_some_and(|back| buffer.start < back.start);
+        if backwards {
+            buffers.clear();
+            self.shared.cursor.store(0, Ordering::Relaxed);
         }
-        self.shared.cursor.store(cursor, Ordering::Relaxed);
+        buffers.push_back(buffer);
 
-        // A seek during playback should keep playing from the new spot.
-        if self.shared.playing.load(Ordering::Relaxed) {
-            self.shared.playing.store(true, Ordering::Relaxed);
+        // Keep at most one chunk of lookahead. A played-out front is dropped
+        // (the cursor is rebased onto the next chunk); otherwise the newest
+        // chunk gives way, so audio that is about to play is never cut.
+        while buffers.len() > 2 {
+            let cursor = self.shared.cursor.load(Ordering::Relaxed) as usize;
+            match buffers.front() {
+                Some(front) if cursor >= front.frames() => {
+                    let played = front.frames();
+                    buffers.pop_front();
+                    self.shared
+                        .cursor
+                        .store((cursor - played) as u64, Ordering::Relaxed);
+                }
+                _ => {
+                    buffers.pop_back();
+                }
+            }
         }
-        let _ = start;
     }
 
     /// Starts or resumes output at the given timeline position.
+    ///
+    /// The cursor is placed inside whichever queued chunk covers `at`; when no
+    /// chunk does yet, playback starts at the front of the queue, so the next
+    /// frame comparison re-syncs the picture instead of stalling.
     pub fn play_from(&self, at: Time) {
         let cursor = {
-            let buffer = match self.shared.buffer.lock() {
-                Ok(buffer) => buffer,
-                Err(_) => return,
+            let Ok(buffers) = self.shared.buffers.lock() else {
+                return;
             };
-            buffer.frame_at(at).unwrap_or(0) as u64
+            match buffers.front() {
+                Some(front) => front.frame_at(at).unwrap_or(0) as u64,
+                None => 0,
+            }
         };
         self.shared.cursor.store(cursor, Ordering::Relaxed);
         self.shared.playing.store(true, Ordering::Relaxed);
@@ -155,18 +187,34 @@ impl AudioEngine {
         self.shared.playing.store(false, Ordering::Relaxed);
     }
 
+    pub fn is_playing(&self) -> bool {
+        self.shared.playing.load(Ordering::Relaxed)
+    }
+
+    /// Whether queued audio covers `at`, i.e. playback can start without a
+    /// decode. Used to keep pause/resume instant.
+    pub fn covers(&self, at: Time) -> bool {
+        let Ok(buffers) = self.shared.buffers.lock() else {
+            return false;
+        };
+        buffers
+            .iter()
+            .any(|buffer| at >= buffer.start && at < buffer.start.saturating_add(buffer.duration()))
+    }
+
     /// Where the audio has actually reached on the timeline.
     ///
-    /// Returns `None` when there is no audio loaded, so the caller can fall
-    /// back to its own clock.
+    /// Returns `None` when no audio is queued, so the caller can fall back to
+    /// its own clock.
     pub fn position(&self) -> Option<Time> {
-        let buffer = self.shared.buffer.lock().ok()?;
-        if buffer.is_empty() {
+        let buffers = self.shared.buffers.lock().ok()?;
+        let front = buffers.front()?;
+        if front.is_empty() {
             return None;
         }
         let frames = self.shared.cursor.load(Ordering::Relaxed);
         let micros = (frames as i128 * 1_000_000 / SAMPLE_RATE as i128) as i64;
-        Some(buffer.start.saturating_add(Time(micros)))
+        Some(front.start.saturating_add(Time(micros)))
     }
 
     pub fn set_volume(&self, volume: f32) {
@@ -181,12 +229,12 @@ impl AudioEngine {
         }
     }
 
-    /// Drops the buffer, e.g. when the source changes.
+    /// Drops queued audio, e.g. when the source or position changes.
     pub fn clear(&self) {
         self.shared.playing.store(false, Ordering::Relaxed);
         self.shared.cursor.store(0, Ordering::Relaxed);
-        if let Ok(mut slot) = self.shared.buffer.lock() {
-            *slot = AudioBuffer::default();
+        if let Ok(mut buffers) = self.shared.buffers.lock() {
+            buffers.clear();
         }
     }
 }
@@ -210,36 +258,158 @@ fn fill(shared: &Shared, output: &mut [f32]) {
         return;
     }
 
-    let Ok(buffer) = shared.buffer.try_lock() else {
+    let Ok(mut buffers) = shared.buffers.try_lock() else {
         return;
     };
-    if buffer.is_empty() {
-        return;
-    }
 
     let gain = shared.volume.load(Ordering::Relaxed) as f32 / 1000.0;
     let mut cursor = shared.cursor.load(Ordering::Relaxed) as usize;
-    let total_frames = buffer.frames();
+    let mut written = 0;
 
-    for frame in output.chunks_mut(CHANNELS) {
-        if cursor >= total_frames {
+    while written < output.len() {
+        // Move past a exhausted chunk (a boundary between prefetched pieces).
+        while buffers
+            .front()
+            .is_some_and(|front| cursor >= front.frames())
+        {
+            buffers.pop_front();
+            cursor = 0;
+        }
+
+        let Some(front) = buffers.front() else {
             shared.playing.store(false, Ordering::Relaxed);
             break;
-        }
-        let base = cursor * CHANNELS;
-        for (channel, slot) in frame.iter_mut().enumerate() {
-            let sample = buffer.samples.get(base + channel).copied().unwrap_or(0.0);
+        };
+
+        let out_frames = (output.len() - written) / CHANNELS;
+        let take = out_frames.min(front.frames() - cursor);
+        let source_base = cursor * CHANNELS;
+        let dest = &mut output[written..written + take * CHANNELS];
+        let source = &front.samples[source_base..source_base + take * CHANNELS];
+        for (slot, sample) in dest.iter_mut().zip(source.iter()) {
             *slot = sample * gain;
         }
-        cursor += 1;
+
+        written += take * CHANNELS;
+        cursor += take;
     }
 
     shared.cursor.store(cursor as u64, Ordering::Relaxed);
 }
 
+// --- decode worker ------------------------------------------------------
+
+/// One audio decode request: `span` of `path` starting at `source_start`,
+/// destined to be played at `timeline_start`.
+#[derive(Debug)]
+pub struct AudioDecodeJob {
+    pub generation: u64,
+    pub install: Arc<FfmpegInstall>,
+    pub path: PathBuf,
+    pub source_start: Time,
+    pub span: Time,
+    pub timeline_start: Time,
+}
+
+/// Decoded audio headed back to the UI thread.
+#[derive(Debug)]
+pub struct DecodedAudio {
+    pub generation: u64,
+    /// Already re-based onto the timeline (`start` is `timeline_start`).
+    pub buffer: AudioBuffer,
+    /// Set when decoding failed; the buffer is then empty.
+    pub failed: Option<String>,
+}
+
+/// Background audio decoder.
+///
+/// Decoding the *whole* remaining clip up front used to happen synchronously on
+/// the UI thread, which froze the picture for seconds on long files. Requests
+/// are now bounded chunks handled off-thread; the app prefetches the next chunk
+/// while the current one plays.
+pub struct AudioWorker {
+    tx: mpsc::Sender<AudioDecodeJob>,
+    events: mpsc::Receiver<DecodedAudio>,
+}
+
+impl AudioWorker {
+    pub fn spawn() -> Self {
+        let (tx, rx) = mpsc::channel::<AudioDecodeJob>();
+        let (event_tx, events) = mpsc::channel::<DecodedAudio>();
+
+        std::thread::Builder::new()
+            .name("clipforge-audio-decode".to_owned())
+            .spawn(move || run_audio_worker(rx, event_tx))
+            .expect("spawning the audio decode worker");
+
+        Self { tx, events }
+    }
+
+    pub fn request(&self, job: AudioDecodeJob) {
+        let _ = self.tx.send(job);
+    }
+
+    /// Newest result per generation; older ones were superseded by a seek.
+    pub fn drain(&self) -> Vec<DecodedAudio> {
+        let mut out = Vec::new();
+        while let Ok(decoded) = self.events.try_recv() {
+            out.push(decoded);
+        }
+        out
+    }
+}
+
+fn run_audio_worker(rx: mpsc::Receiver<AudioDecodeJob>, events: mpsc::Sender<DecodedAudio>) {
+    while let Ok(job) = rx.recv() {
+        // Collapse a burst of requests: only the newest one describes where the
+        // user actually is, and each decode is short but not free.
+        let mut job = job;
+        while let Ok(newer) = rx.try_recv() {
+            job = newer;
+        }
+
+        let (buffer, failed) = match cf_core::media::audio::decode(
+            &job.install,
+            &job.path,
+            job.source_start,
+            job.span,
+        ) {
+            Ok(mut buffer) => {
+                buffer.start = job.timeline_start;
+                (buffer, None)
+            }
+            Err(err) => (
+                AudioBuffer {
+                    samples: Vec::new(),
+                    start: job.timeline_start,
+                },
+                Some(err.detail()),
+            ),
+        };
+
+        if events
+            .send(DecodedAudio {
+                generation: job.generation,
+                buffer,
+                failed,
+            })
+            .is_err()
+        {
+            return;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chunk(start: f64, frames: usize, value: f32) -> AudioBuffer {
+        AudioBuffer {
+            samples: vec![value; frames * CHANNELS],
+            start: Time::from_secs(start),
+        }
+    }
 
     #[test]
     fn engine_constructs_even_without_a_device() {
@@ -259,7 +429,7 @@ mod tests {
         };
         engine.clear();
         assert_eq!(engine.position(), None);
-        assert!(!engine.shared.playing.load(Ordering::Relaxed));
+        assert!(!engine.is_playing());
     }
 
     #[test]
@@ -289,13 +459,7 @@ mod tests {
     #[test]
     fn fill_advances_and_applies_gain() {
         let shared = Shared::new();
-        {
-            let mut buffer = shared.buffer.lock().unwrap();
-            *buffer = AudioBuffer {
-                samples: vec![0.5; 8 * CHANNELS],
-                start: Time::ZERO,
-            };
-        }
+        shared.buffers.lock().unwrap().push_back(chunk(0.0, 8, 0.5));
         shared.volume.store(500, Ordering::Relaxed); // 50%
         shared.playing.store(true, Ordering::Relaxed);
 
@@ -310,13 +474,7 @@ mod tests {
     #[test]
     fn fill_stops_at_the_end_of_the_buffer() {
         let shared = Shared::new();
-        {
-            let mut buffer = shared.buffer.lock().unwrap();
-            *buffer = AudioBuffer {
-                samples: vec![0.5; 4 * CHANNELS],
-                start: Time::ZERO,
-            };
-        }
+        shared.buffers.lock().unwrap().push_back(chunk(0.0, 4, 0.5));
         shared.playing.store(true, Ordering::Relaxed);
 
         let mut out = vec![0.0f32; 16];
@@ -330,15 +488,32 @@ mod tests {
     }
 
     #[test]
-    fn muted_output_is_silent_without_advancing() {
+    fn fill_continues_into_the_next_chunk() {
         let shared = Shared::new();
         {
-            let mut buffer = shared.buffer.lock().unwrap();
-            *buffer = AudioBuffer {
-                samples: vec![0.5; 8 * CHANNELS],
-                start: Time::ZERO,
-            };
+            let mut buffers = shared.buffers.lock().unwrap();
+            buffers.push_back(chunk(0.0, 2, 0.5));
+            buffers.push_back(chunk(1.0, 2, 0.25));
         }
+        shared.playing.store(true, Ordering::Relaxed);
+
+        let mut out = vec![0.0f32; 16];
+        fill(&shared, &mut out);
+
+        // 8 frames requested: 2 from the first chunk, 2 from the second, then
+        // the queue runs dry and the rest is silence.
+        assert!((out[0] - 0.5).abs() < 1e-6);
+        assert!((out[3] - 0.5).abs() < 1e-6);
+        assert!((out[4] - 0.25).abs() < 1e-6);
+        assert!((out[7] - 0.25).abs() < 1e-6);
+        assert_eq!(out[8], 0.0);
+        assert!(!shared.playing.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn muted_output_is_silent_without_advancing() {
+        let shared = Shared::new();
+        shared.buffers.lock().unwrap().push_back(chunk(0.0, 8, 0.5));
         shared.playing.store(true, Ordering::Relaxed);
         shared.muted.store(true, Ordering::Relaxed);
 
@@ -346,5 +521,71 @@ mod tests {
         fill(&shared, &mut out);
         assert!(out.iter().all(|s| *s == 0.0));
         assert_eq!(shared.cursor.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn push_keeps_the_playing_chunk_when_overfilled() {
+        let engine = AudioEngine {
+            shared: Arc::new(Shared::new()),
+            stream: None,
+            unavailable: None,
+        };
+        engine.push(chunk(0.0, 4, 0.5));
+        engine.push(chunk(1.0, 4, 0.5));
+        engine.push(chunk(2.0, 4, 0.5));
+
+        // Nothing has played yet, so the front chunk stays; the newest is
+        // dropped instead of cutting audio that is about to play.
+        let buffers = engine.shared.buffers.lock().unwrap();
+        assert_eq!(buffers.len(), 2);
+        assert_eq!(buffers.front().unwrap().start, Time::ZERO);
+        assert_eq!(buffers.back().unwrap().start, Time::from_secs(1.0));
+    }
+
+    #[test]
+    fn push_drops_a_played_out_front() {
+        let engine = AudioEngine {
+            shared: Arc::new(Shared::new()),
+            stream: None,
+            unavailable: None,
+        };
+        engine.push(chunk(0.0, 4, 0.5));
+        engine.shared.cursor.store(4, Ordering::Relaxed); // front fully played
+        engine.push(chunk(1.0, 4, 0.5));
+        engine.push(chunk(2.0, 4, 0.5));
+
+        let buffers = engine.shared.buffers.lock().unwrap();
+        assert_eq!(buffers.len(), 2);
+        assert_eq!(buffers.front().unwrap().start, Time::from_secs(1.0));
+        assert_eq!(engine.shared.cursor.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn push_backwards_drops_stale_audio() {
+        let engine = AudioEngine {
+            shared: Arc::new(Shared::new()),
+            stream: None,
+            unavailable: None,
+        };
+        engine.push(chunk(10.0, 4, 0.5));
+        engine.push(chunk(2.0, 4, 0.5));
+
+        let buffers = engine.shared.buffers.lock().unwrap();
+        assert_eq!(buffers.len(), 1);
+        assert_eq!(buffers.front().unwrap().start, Time::from_secs(2.0));
+    }
+
+    #[test]
+    fn position_follows_the_cursor() {
+        let engine = AudioEngine {
+            shared: Arc::new(Shared::new()),
+            stream: None,
+            unavailable: None,
+        };
+        engine.push(chunk(5.0, SAMPLE_RATE as usize, 0.0));
+        engine.play_from(Time::from_secs(5.5));
+
+        let position = engine.position().expect("position");
+        assert!((position.as_secs_f64() - 5.5).abs() < 1e-3);
     }
 }

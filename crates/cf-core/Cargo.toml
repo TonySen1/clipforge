@@ -11,3 +11,6 @@ serde_json = { workspace = true }
 directories = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+# Scrub-strip frames are stored as JPEG: ~25x smaller than RGBA at the same
+# resolution, and decoding one takes a few milliseconds.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

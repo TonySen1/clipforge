@@ -9,7 +9,7 @@ use crate::i18n::tr;
 use crate::theme::{Metrics, Palette};
 use crate::widgets::controls::{primary_button, subtle_button};
 use cf_core::media::export::{
-    format_drift, CompatReport, ExportBlocker, ExportMode, LosslessPlan, PrecisePlan,
+    format_drift, CompatReport, EncoderSpeed, ExportBlocker, ExportMode, LosslessPlan, PrecisePlan,
 };
 use cf_core::time::Time;
 use egui::{
@@ -33,6 +33,8 @@ pub enum ExportAction {
     OutputEdited,
     /// The user pressed the format shortcut next to the path.
     SetContainer(crate::dialogs::export::ContainerChoice),
+    /// The user picked how much effort the encoder spends per frame.
+    SetSpeed(EncoderSpeed),
 }
 
 /// Container picked from the extension buttons under the path field.
@@ -314,7 +316,7 @@ fn setup_body(
             }
         },
         ExportMode::Precise => match state.precise {
-            Some(plan) => precise_body(ui, p, plan),
+            Some(plan) => precise_body(ui, p, plan, action),
             None => {
                 ui.label(
                     RichText::new(tr("export.no_selection"))
@@ -566,7 +568,7 @@ fn mode_chip(ui: &mut Ui, p: &Palette, selected: bool, label: &str) -> egui::Res
     .inner
 }
 
-fn precise_body(ui: &mut Ui, p: &Palette, plan: &PrecisePlan) {
+fn precise_body(ui: &mut Ui, p: &Palette, plan: &PrecisePlan, action: &mut ExportAction) {
     ui.label(
         RichText::new(tr("export.precise_summary"))
             .size(11.0)
@@ -598,6 +600,27 @@ fn precise_body(ui: &mut Ui, p: &Palette, plan: &PrecisePlan) {
         p,
         &tr("export.segments"),
         &plan.pieces.len().to_string(),
+    );
+
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(tr("export.speed_label"))
+                .size(10.5)
+                .color(p.text_muted),
+        );
+        for speed in EncoderSpeed::ALL {
+            let selected = plan.settings.speed == speed;
+            if container_chip(ui, p, selected, &tr(speed.i18n_key())).clicked() && !selected {
+                *action = ExportAction::SetSpeed(speed);
+            }
+        }
+    });
+    ui.add_space(2.0);
+    ui.label(
+        RichText::new(tr(plan.settings.speed.hint_key()))
+            .size(10.0)
+            .color(p.text_muted),
     );
 
     let gaps = plan.pieces.iter().filter(|piece| piece.is_gap()).count();

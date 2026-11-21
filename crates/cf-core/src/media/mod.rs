@@ -27,4 +27,4 @@ pub use preview::{
     decode_frame, preview_size, Frame, PlaybackProcess, PreviewSize, MAX_PREVIEW_EDGE,
 };
 pub use probe::{AudioStream, ContainerInfo, MediaInfo, VideoStream};
-pub use thumbs::{KeyframeStrip, STRIP_BUDGET_BYTES, STRIP_MAX_EDGE};
+pub use thumbs::{KeyframeStrip, STRIP_BUDGET_BYTES, STRIP_MAX_EDGE, STRIP_MAX_FRAMES};

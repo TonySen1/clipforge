@@ -7,8 +7,8 @@ use crate::export::{ExportEvent, ExportJob, ExportWorker, JobSource};
 use crate::import::{EngineInfo, ImportEvent, ImportWorker};
 use crate::preview::{PreviewRequest, PreviewWorker};
 use cf_core::media::export::{
-    check_compat, only_segments, plan_precise, timeline_pieces, CompatReport, ExportMode,
-    ExportRange, PreciseSettings,
+    check_compat, only_segments, plan_precise, plan_smart_cut, timeline_pieces, CompatReport,
+    EncoderSpeed, ExportMode, ExportRange, PreciseSettings,
 };
 use cf_core::{CoreError, History, MergeOutcome, Preferences, ThemeMode, TrimEdge};
 use cf_ui::dialogs::export::{self, ExportAction, ExportDialogState, RunningState};
@@ -136,10 +136,14 @@ pub struct ClipForgeApp {
     /// Current frame texture. Recreated when the frame size changes.
     frame_texture: Option<TextureHandle>,
     frame_aspect: f32,
-    /// Keyframe frame to paint on the next repaint, set when a scrub begins.
+    /// Sample to paint on the next repaint, set when a scrub begins.
     /// Applied at the top of the frame so the texture is never touched from
     /// outside egui's update cycle.
     pending_strip_frame: Option<cf_core::media::Frame>,
+    /// Decoded strip samples, so dragging back over the same spot does not
+    /// decode the JPEG again. Eight full-size frames is ~16 MB.
+    strip_cache: std::collections::HashMap<(cf_core::SourceId, usize), cf_core::media::Frame>,
+    strip_cache_order: std::collections::VecDeque<(cf_core::SourceId, usize)>,
     /// Bumped on every request so stale frames can be dropped.
     preview_generation: u64,
     /// Generation the UI is currently waiting for; `None` means idle.
@@ -167,15 +171,22 @@ pub struct ClipForgeApp {
 
     // --- audio ----------------------------------------------------------
     audio: crate::audio::AudioEngine,
+    /// Background decoder for the preview audio chunks.
+    audio_worker: crate::audio::AudioWorker,
     /// 0.0..=1.0, persisted in preferences.
     volume: f32,
-    /// Timeline span the audio buffer covers, so a seek or a clip boundary can
-    /// decide whether a re-decode is needed.
-    audio_span: Option<(cf_core::Time, cf_core::Time)>,
-    /// Set when playback was requested but the first video frame has not
-    /// arrived yet. Audio starts only when that frame lands, otherwise sound
-    /// runs 100-200 ms ahead of the picture after every seek.
-    audio_pending_start: Option<cf_core::Time>,
+    /// Bumped whenever the queued audio is dropped (seek, source change), so
+    /// decode results from the previous position are ignored.
+    audio_generation: u64,
+    /// End of the timeline span audio has been queued or requested for.
+    /// Prefetch continues from here, keeping chunks contiguous.
+    audio_ahead_until: Option<cf_core::Time>,
+    /// Source the queued audio was decoded from, so resuming after an edit
+    /// cannot play PCM belonging to a different file.
+    audio_source: Option<cf_core::SourceId>,
+    /// True once the first frame of this playback run is on screen. Audio waits
+    /// for it so sound never runs ahead of the picture after a seek.
+    playback_frame_shown: bool,
 
     // --- capture --------------------------------------------------------
     /// Paths written this session, so a second capture never reuses a name
@@ -202,12 +213,23 @@ pub struct ClipForgeApp {
     export_log: Option<String>,
     export_mode: ExportMode,
     export_range: ExportRange,
+    /// Encoder effort for precise exports; the dialog lets the user change it.
+    export_speed: EncoderSpeed,
     /// Set when lossless is blocked by incompatible segments, to offer the
     /// "switch to precise" escape hatch in the dialog.
     export_compat: Option<CompatReport>,
     /// Plan for precise mode; recomputed with the mode.
     export_precise_plan: Option<cf_core::media::export::PrecisePlan>,
 }
+
+/// Audio decoded per request. Long enough that boundaries are rare, short
+/// enough that the first chunk is ready almost immediately (~20-50 ms) and
+/// memory stays small (~7 MB).
+const AUDIO_CHUNK: cf_core::Time = cf_core::Time(20_000_000);
+/// Decode the next chunk when this much audio is left.
+const AUDIO_PREFETCH: cf_core::Time = cf_core::Time(5_000_000);
+/// Fallback step when the playhead sits in a gap, so prefetch does not spin.
+const AUDIO_GAP_PROBE: cf_core::Time = cf_core::Time(250_000);
 
 impl ClipForgeApp {
     pub fn new(cc: &CreationContext<'_>) -> Self {
@@ -252,6 +274,8 @@ impl ClipForgeApp {
             frame_texture: None,
             frame_aspect: 16.0 / 9.0,
             pending_strip_frame: None,
+            strip_cache: std::collections::HashMap::new(),
+            strip_cache_order: std::collections::VecDeque::new(),
             preview_generation: 0,
             awaiting: None,
             playing_preview: false,
@@ -266,9 +290,12 @@ impl ClipForgeApp {
             scrubbing: false,
 
             audio: crate::audio::AudioEngine::new(),
+            audio_worker: crate::audio::AudioWorker::spawn(),
             volume: 0.8,
-            audio_span: None,
-            audio_pending_start: None,
+            audio_generation: 0,
+            audio_ahead_until: None,
+            audio_source: None,
+            playback_frame_shown: false,
 
             export_open: false,
             export_output: None,
@@ -281,6 +308,7 @@ impl ClipForgeApp {
             export_log: None,
             export_mode: ExportMode::default(),
             export_range: ExportRange::default(),
+            export_speed: EncoderSpeed::default(),
             export_compat: None,
             export_precise_plan: None,
         };
@@ -597,7 +625,6 @@ impl ClipForgeApp {
                 path: source.path().clone(),
                 info: source.info.clone(),
                 max_edge: self.preview_max_edge(),
-                thumbs: source.thumbs.clone(),
             });
             self.preview_source = Some(source_id);
             // The old texture stays on screen until the new frame arrives; it
@@ -605,17 +632,14 @@ impl ClipForgeApp {
             // and blanking it here made the preview flash its empty state.
         }
 
-        // Show the nearest keyframe into the texture *here*, not through the
-        // worker: the worker decodes serially, so a queued request would only be
-        // answered after the previous decode finished. Doing it in the app makes
-        // the picture track the pointer at frame rate; the sharp frame lands
-        // later and replaces it.
+        // Show the nearest sample into the texture *here*, not through the
+        // worker: the worker decodes serially, so a queued request would only
+        // be answered after the previous decode finished. Doing it in the app
+        // makes the picture track the pointer at frame rate; the sharp frame
+        // lands later and replaces it.
         if !precise {
-            if let Some(frame) = source
-                .thumbs()
-                .and_then(|strip| strip.at_or_before(source_time))
-            {
-                self.pending_strip_frame = Some(frame.clone());
+            if let Some(frame) = self.strip_frame(source_id, source_time) {
+                self.pending_strip_frame = Some(frame);
             }
         }
 
@@ -646,7 +670,6 @@ impl ClipForgeApp {
                     path: source.path().clone(),
                     info: source.info.clone(),
                     max_edge: self.preview_max_edge(),
-                    thumbs: source.thumbs.clone(),
                 });
                 self.preview_source = Some(source_id);
             }
@@ -663,73 +686,155 @@ impl ClipForgeApp {
             from: source_time,
         });
 
-        // Decode the audio, but do NOT start it: the first video frame is
-        // still 100-200 ms away (the decoder has to seek), and starting now
-        // would put sound ahead of the picture. `poll_preview` starts it the
-        // moment the first matching frame is uploaded.
-        self.prepare_audio_for_playback();
-        self.audio.stop();
-        self.audio_pending_start = Some(self.project.playhead);
+        // Audio never blocks this call: the first chunk is decoded on a worker
+        // thread and starts only once the first frame is on screen, so sound
+        // cannot run ahead of the picture after a seek.
+        self.begin_audio_from(self.project.playhead);
     }
 
-    /// Ensures the audio buffer covers the playhead, decoding if needed.
+    /// Drops queued audio and ignores any decode still in flight.
+    fn reset_audio(&mut self) {
+        self.audio_generation += 1;
+        self.audio.clear();
+        self.audio_ahead_until = None;
+        self.audio_source = None;
+        self.playback_frame_shown = false;
+    }
+
+    /// Arms audio for a playback run starting at `at`.
     ///
-    /// Only the current segment is decoded: decoding a whole multi-clip
-    /// timeline would waste time on parts the user may never reach, and the
-    /// buffer has to be re-cut at every clip boundary anyway.
-    fn prepare_audio_for_playback(&mut self) {
+    /// Never decodes here: a request goes to the audio worker, so pressing play
+    /// stays instantaneous no matter how long the clip is.
+    fn begin_audio_from(&mut self, at: cf_core::Time) {
+        let expected = self.media_at(at).map(|(source, _)| source);
+        let reusable = self.audio.covers(at) && self.audio_source == expected;
+        if !reusable {
+            self.audio_generation += 1;
+            self.audio.clear();
+            self.audio_ahead_until = None;
+            self.audio_source = None;
+        }
+        self.playback_frame_shown = false;
+        self.ensure_audio_ahead();
+    }
+
+    /// Queues the next chunk when the playhead approaches the decoded edge.
+    ///
+    /// Chunks are contiguous: each one starts where the previous ended, so the
+    /// callback can cross a boundary with a plain `pop_front`.
+    fn ensure_audio_ahead(&mut self) {
+        if !self.playing_preview || self.muted {
+            return;
+        }
+        let playhead = self.project.playhead;
+        let ahead = self.audio_ahead_until.unwrap_or(cf_core::Time::ZERO);
+        if ahead.saturating_sub(playhead) > AUDIO_PREFETCH {
+            return;
+        }
+        let from = ahead.max(playhead);
+        self.request_audio(from);
+    }
+
+    /// Asks the worker for one chunk starting at `from`.
+    fn request_audio(&mut self, from: cf_core::Time) {
         let Some(engine) = &self.engine else {
             return;
         };
-        // Resolve the clip under the playhead; gaps have no audio.
         let Some(entry) = self
             .project
             .video_track()
-            .and_then(|track| track.clip_at(self.project.playhead))
+            .and_then(|track| track.clip_at(from))
             .cloned()
         else {
-            self.audio.clear();
-            self.audio_span = None;
+            // A gap has no audio. Aim at the next clip so the prefetch loop
+            // does not retry the same empty spot; past the last clip there is
+            // nothing left to decode at all.
+            let next = self.project.video_track().and_then(|track| {
+                track
+                    .clips
+                    .iter()
+                    .find(|clip| clip.timeline_start > from)
+                    .map(|clip| clip.timeline_start)
+            });
+            self.audio_ahead_until = Some(match next {
+                Some(start) => start.max(from.saturating_add(AUDIO_GAP_PROBE)),
+                None => cf_core::Time::MAX,
+            });
             return;
         };
         let Some(source) = self.project.source(entry.source_id) else {
             return;
         };
 
-        // Already covered by the loaded buffer? Nothing to do.
-        if let Some((from, to)) = self.audio_span {
-            if from <= self.project.playhead && self.project.playhead < to {
-                return;
-            }
+        let span = entry.timeline_end().saturating_sub(from).min(AUDIO_CHUNK);
+        if span <= cf_core::Time::ZERO {
+            return;
         }
 
-        let start = self.project.playhead;
-        let remaining = entry.timeline_end().saturating_sub(start);
+        self.audio_worker.request(crate::audio::AudioDecodeJob {
+            generation: self.audio_generation,
+            install: engine.install.clone(),
+            path: source.path().clone(),
+            source_start: entry.source_time_at(from),
+            span,
+            timeline_start: from,
+        });
+        self.audio_source = Some(source.id);
+        self.audio_ahead_until = Some(from.saturating_add(span));
+    }
 
-        match cf_core::media::audio::decode(
-            &engine.install,
-            source.path(),
-            entry.source_time_at(start),
-            remaining,
-        ) {
-            Ok(mut buffer) => {
-                // Re-base the buffer onto the timeline so the cursor maps
-                // straight onto playhead positions.
-                buffer.start = start;
-                if buffer.is_empty() {
-                    log::debug!("no audio in {}", source.display_name());
-                }
-                self.audio.set_volume(self.volume);
-                self.audio.set_muted(self.muted);
-                self.audio.load(buffer);
-                self.audio_span = Some((start, start.saturating_add(remaining)));
+    /// Applies decoded audio and starts the clock when both picture and sound
+    /// are ready.
+    fn poll_audio(&mut self, ctx: &egui::Context) {
+        let mut got_audio = false;
+        for decoded in self.audio_worker.drain() {
+            if decoded.generation != self.audio_generation {
+                continue;
             }
-            Err(err) => {
-                log::warn!("audio decode failed: {}", err.detail());
+            if let Some(detail) = decoded.failed {
+                log::warn!("audio decode failed: {detail}");
                 self.audio.clear();
-                self.audio_span = None;
+                continue;
             }
+            if decoded.buffer.is_empty() {
+                log::debug!("no audio in the requested span");
+                continue;
+            }
+            self.audio.set_volume(self.volume);
+            self.audio.set_muted(self.muted);
+            self.audio.push(decoded.buffer);
+            got_audio = true;
         }
+
+        if got_audio {
+            self.maybe_start_audio();
+            ctx.request_repaint();
+        }
+    }
+
+    /// Starts (or restarts) the audio clock at the picture's position once the
+    /// first frame is on screen and sound is queued.
+    ///
+    /// Starting earlier would run sound ahead of the picture after a seek;
+    /// starting later would leave it behind, so this is called on every
+    /// playback frame and is a no-op once the clock is running.
+    fn maybe_start_audio(&mut self) {
+        if !self.playing_preview || self.muted || !self.playback_frame_shown {
+            return;
+        }
+        if self.audio.is_playing() {
+            return;
+        }
+
+        let playhead = self.project.playhead;
+        if !self.audio.covers(playhead) {
+            // Nothing queued for this instant yet (decode in flight, a gap, or
+            // a silent source). Keep the prefetch going and try next frame.
+            self.ensure_audio_ahead();
+            return;
+        }
+
+        self.audio.play_from(playhead);
     }
 
     fn stop_playback(&mut self) {
@@ -737,7 +842,7 @@ impl ClipForgeApp {
             return;
         }
         self.playing_preview = false;
-        self.audio_pending_start = None;
+        self.playback_frame_shown = false;
         self.audio.stop();
         self.preview.send(PreviewRequest::Stop);
         // Re-seek so the frame matches the playhead, which playback may have
@@ -758,6 +863,7 @@ impl ClipForgeApp {
 
         if drained.finished {
             self.playing_preview = false;
+            self.playback_frame_shown = false;
             self.audio.stop();
             self.project.set_playhead(self.duration());
         }
@@ -782,27 +888,22 @@ impl ClipForgeApp {
         self.awaiting = None;
 
         if playing {
-            // First frame of this playback run: the picture is now on screen,
-            // so this is the correct instant to start the audio clock.
-            if let Some(at) = self.audio_pending_start.take() {
-                if !self.muted {
-                    self.audio.play_from(at);
-                }
-            }
+            // The picture is on screen from here on; audio may start.
+            self.playback_frame_shown = true;
 
-            // Audio is the master clock when it is available: a sound card
-            // cannot drift, whereas `-re` is only accurate to a frame and the
-            // two would slowly separate over a long clip. Fall back to the
-            // decoder's own timestamps when there is no audio.
-            let position = if self.muted {
+            // Audio is the master clock while it is actually running: a sound
+            // card cannot drift, whereas `-re` is only accurate to a frame.
+            // Before the first chunk lands (and when muted) the decoder's own
+            // timestamps drive the playhead instead.
+            let position = if self.muted || !self.audio.is_playing() {
                 None
             } else {
                 self.audio.position()
             };
 
             let next = match position {
-                Some(audio_pos) if audio_pos > cf_core::Time::ZERO => audio_pos,
-                _ => {
+                Some(audio_pos) => audio_pos,
+                None => {
                     let elapsed = frame.time.saturating_sub(self.playback_source_origin);
                     self.playback_timeline_origin.saturating_add(elapsed)
                 }
@@ -811,16 +912,10 @@ impl ClipForgeApp {
             self.project.set_playhead(next);
             self.follow_playhead = true;
 
-            // The buffer only covers one clip; re-arm at each boundary.
-            if self
-                .audio_span
-                .is_some_and(|(_, end)| self.project.playhead >= end)
-            {
-                self.prepare_audio_for_playback();
-                if !self.muted {
-                    self.audio.play_from(self.project.playhead);
-                }
-            }
+            // Start sound at the picture's position once both exist, then keep
+            // a chunk of lookahead queued across clip boundaries.
+            self.maybe_start_audio();
+            self.ensure_audio_ahead();
         }
 
         self.frame_aspect = if frame.height > 0 {
@@ -849,6 +944,36 @@ impl ClipForgeApp {
             // `-re` paces frames; keep draining without waiting for input.
             ctx.request_repaint();
         }
+    }
+
+    /// Decodes the strip sample covering `time`, caching the last few.
+    ///
+    /// Returns `None` when the source has no strip yet, which is the case for
+    /// the first moments after import.
+    fn strip_frame(
+        &mut self,
+        source_id: cf_core::SourceId,
+        time: cf_core::Time,
+    ) -> Option<cf_core::media::Frame> {
+        let (index, frame) = {
+            let strip = self.project.source(source_id)?.thumbs()?;
+            let index = strip.index_at_or_before(time)?;
+            if let Some(frame) = self.strip_cache.get(&(source_id, index)) {
+                return Some(frame.clone());
+            }
+            (index, strip.decode(index).ok()?)
+        };
+
+        const CACHE_LIMIT: usize = 8;
+        let key = (source_id, index);
+        while self.strip_cache_order.len() >= CACHE_LIMIT {
+            if let Some(oldest) = self.strip_cache_order.pop_front() {
+                self.strip_cache.remove(&oldest);
+            }
+        }
+        self.strip_cache.insert(key, frame.clone());
+        self.strip_cache_order.push_back(key);
+        Some(frame)
     }
 
     /// Uploads RGBA pixels into the preview texture, resizing it if needed.
@@ -928,10 +1053,11 @@ impl ClipForgeApp {
                     .as_deref()
                     .and_then(cf_core::media::export::container_for)
                     .unwrap_or("mp4");
-                let settings = match &self.engine {
+                let mut settings = match &self.engine {
                     Some(engine) => PreciseSettings::for_container(container, &engine.install),
                     None => PreciseSettings::default(),
                 };
+                settings.speed = self.export_speed;
                 let plan = plan_precise(&project, start, end, settings);
                 self.export_blocker = plan.blocker.clone();
                 self.export_precise_plan = Some(plan);
@@ -1104,12 +1230,21 @@ impl ClipForgeApp {
                 };
                 let sources = self.job_sources();
                 let label = self.export_label();
+                // Most precise exports of keyframe-rich material can copy the
+                // bulk and re-encode only the cut points.
+                let project = self.export_project();
+                let smart = self
+                    .export_range
+                    .resolve(&project)
+                    .ok()
+                    .and_then(|(start, end)| plan_smart_cut(&project, start, end, &plan.settings));
                 ExportJob::Precise {
                     label,
                     install,
                     sources,
                     output,
                     plan,
+                    smart,
                 }
             }
             ExportMode::Lossless => {
@@ -1298,6 +1433,10 @@ impl ClipForgeApp {
                 self.export_mode = mode;
                 self.refresh_export_plan();
             }
+            ExportAction::SetSpeed(speed) => {
+                self.export_speed = speed;
+                self.refresh_export_plan();
+            }
             ExportAction::SwitchToPrecise => {
                 self.export_mode = ExportMode::Precise;
                 self.refresh_export_plan();
@@ -1378,10 +1517,8 @@ impl ClipForgeApp {
                 TimelineAction::Seek { time, precise } => {
                     self.stop_playback();
                     self.project.set_playhead(time);
-                    // Invalidate the audio buffer: it starts at the old spot.
-                    self.audio_span = None;
-                    self.audio_pending_start = None;
-                    self.audio.clear();
+                    // Invalidate the queued audio: it belongs to the old spot.
+                    self.reset_audio();
                     self.request_seek(precise);
                     // `precise` marks the release, which ends the scrub.
                     self.scrubbing = !precise;
@@ -1492,6 +1629,7 @@ impl ClipForgeApp {
                 let label = outcome.label();
                 self.project = after;
                 self.history.push(label, before, self.project.clone());
+                self.reset_audio();
                 self.request_seek(false);
             }
             Err(err) => {
@@ -1618,6 +1756,9 @@ impl ClipForgeApp {
         let duration = self.duration();
         let playhead = self.project.playhead;
         self.project.set_playhead(playhead.min(duration));
+        // The clip shape changed under the playhead; queued PCM may now map to
+        // different source times.
+        self.reset_audio();
         self.request_seek(false);
         self.refresh_export_plan();
     }
@@ -1725,6 +1866,7 @@ impl ClipForgeApp {
         };
 
         self.stop_playback();
+        self.reset_audio();
 
         let before = self.project.clone();
         if !self.project.remove_source(source_id) {
@@ -1776,9 +1918,7 @@ impl ClipForgeApp {
 
         self.stop_playback();
         self.project.set_playhead(target);
-        self.audio_span = None;
-        self.audio_pending_start = None;
-        self.audio.clear();
+        self.reset_audio();
         self.request_seek(true);
     }
 
@@ -1897,11 +2037,13 @@ impl ClipForgeApp {
                 self.muted = !self.muted;
                 self.audio.set_muted(self.muted);
                 if !self.muted && self.playing_preview {
-                    // Resume from the current picture, not from the start.
-                    self.audio.play_from(self.project.playhead);
-                    self.audio_pending_start = None;
-                } else if self.muted {
-                    self.audio_pending_start = None;
+                    // Unmuting mid-playback: start from the current picture,
+                    // decoding a chunk first if muting skipped that work.
+                    if self.audio.covers(self.project.playhead) {
+                        self.maybe_start_audio();
+                    } else {
+                        self.ensure_audio_ahead();
+                    }
                 }
             }
             TransportAction::Volume(value) => {
@@ -2125,23 +2267,17 @@ impl ClipForgeApp {
                 ImportEvent::Thumbs { source_id, strip } => {
                     // Attach to the live source so the preview worker can use
                     // it; nothing else in the project changes.
-                    let strip = std::sync::Arc::new(strip);
                     if let Some(source) = self
                         .project
                         .sources
                         .iter_mut()
                         .find(|source| source.id == source_id)
                     {
-                        source.thumbs = Some(strip.clone());
+                        source.set_thumbs(strip);
                     }
-                    // Hand it to the worker too, unless it is already pointed
-                    // at another source (that copy is simply unused).
-                    if self.preview_source == Some(source_id) {
-                        self.preview.send(PreviewRequest::Thumbs {
-                            id: source_id,
-                            strip,
-                        });
-                    }
+                    // A drag may already have asked for a frame from this
+                    // source; refresh so the next seek can use the strip.
+                    self.strip_cache.clear();
                 }
                 ImportEvent::Failed { path, error } => {
                     let name = file_label(&path);
@@ -2275,6 +2411,7 @@ impl eframe::App for ClipForgeApp {
             );
         }
         self.poll_preview(&ctx);
+        self.poll_audio(&ctx);
         self.poll_export();
         self.poll_update();
         self.handle_shortcuts(&ctx);

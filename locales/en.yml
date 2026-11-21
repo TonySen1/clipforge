@@ -146,6 +146,14 @@ export:
   mode_precise_hint: The timeline is re-encoded so cuts land exactly where you placed them and gaps become black plus silence. This costs quality and time.
   precise_summary: Output
   segments: Segments
+  speed_label: Encoder
+  speed:
+    fast: Fast
+    fast_hint: Quickest encode; a slightly larger file at the same quality.
+    balanced: Balanced
+    balanced_hint: A middle ground between encoding time and file size.
+    quality: Quality
+    quality_hint: Slowest encode; the smallest file at the same quality.
   gaps_filled: Empty timeline areas will be filled with black frames and silence.
   switch_precise: Switch to precise export
   cut_points: Real cut points

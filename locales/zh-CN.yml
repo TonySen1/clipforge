@@ -146,6 +146,14 @@ export:
   mode_precise_hint: 重新编码整条时间线，剪切点精确落在你放置的位置，空隙填充为黑帧与静音。代价是画质损失和耗时。
   precise_summary: 输出
   segments: 片段数
+  speed_label: 编码速度
+  speed:
+    fast: 快
+    fast_hint: 编码最快，同等画质下文件略大。
+    balanced: 均衡
+    balanced_hint: 在编码耗时和文件大小之间取中。
+    quality: 高质量
+    quality_hint: 编码最慢，同等画质下文件最小。
   gaps_filled: 时间线中的空白区域将用黑帧和静音填充。
   switch_precise: 改用精确导出
   cut_points: 实际剪切点

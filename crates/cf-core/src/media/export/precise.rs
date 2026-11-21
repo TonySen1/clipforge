@@ -65,6 +65,67 @@ impl VideoCodecChoice {
     }
 }
 
+/// How hard the encoder works per frame.
+///
+/// Re-encoding a timeline is CPU-bound, and the presets trade speed for
+/// compression efficiency at the same CRF. `Fast` is the default because an
+/// export that finishes quickly is worth more than a few percent of bitrate.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum EncoderSpeed {
+    #[default]
+    Fast,
+    Balanced,
+    Quality,
+}
+
+impl EncoderSpeed {
+    pub const ALL: [Self; 3] = [Self::Fast, Self::Balanced, Self::Quality];
+
+    pub fn i18n_key(self) -> &'static str {
+        match self {
+            Self::Fast => "export.speed.fast",
+            Self::Balanced => "export.speed.balanced",
+            Self::Quality => "export.speed.quality",
+        }
+    }
+
+    /// One-line explanation shown under the speed chips.
+    pub fn hint_key(self) -> &'static str {
+        match self {
+            Self::Fast => "export.speed.fast_hint",
+            Self::Balanced => "export.speed.balanced_hint",
+            Self::Quality => "export.speed.quality_hint",
+        }
+    }
+
+    /// `-preset` value for libx264.
+    fn x264_preset(self) -> &'static str {
+        match self {
+            Self::Fast => "veryfast",
+            Self::Balanced => "fast",
+            Self::Quality => "medium",
+        }
+    }
+
+    /// `-preset` value for libx265.
+    fn x265_preset(self) -> &'static str {
+        match self {
+            Self::Fast => "veryfast",
+            Self::Balanced => "fast",
+            Self::Quality => "medium",
+        }
+    }
+
+    /// `-cpu-used` for libvpx-vp9 (0 = slowest, 8 = fastest).
+    fn vp9_cpu_used(self) -> u32 {
+        match self {
+            Self::Fast => 6,
+            Self::Balanced => 4,
+            Self::Quality => 2,
+        }
+    }
+}
+
 /// Encoding parameters for a precise export.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreciseSettings {
@@ -77,6 +138,8 @@ pub struct PreciseSettings {
     pub audio_bitrate_kbps: u32,
     /// Fill gaps with black/silence rather than refusing.
     pub fill_gaps: bool,
+    /// Encoder effort; see [`EncoderSpeed`].
+    pub speed: EncoderSpeed,
 }
 
 impl Default for PreciseSettings {
@@ -88,6 +151,7 @@ impl Default for PreciseSettings {
             size: None,
             audio_bitrate_kbps: 192,
             fill_gaps: true,
+            speed: EncoderSpeed::default(),
         }
     }
 }
@@ -139,6 +203,323 @@ impl PrecisePlan {
     pub fn has_audio(&self, id: crate::SourceId) -> bool {
         self.sources_with_audio.contains(&id)
     }
+
+    /// Timeline position the plan starts at.
+    ///
+    /// Pieces cover the export window contiguously, so the first piece's start
+    /// is the window start.
+    pub fn start(&self) -> Time {
+        self.pieces
+            .first()
+            .map(|piece| match piece {
+                TimelinePiece::Clip(segment) => segment.timeline_start,
+                TimelinePiece::Gap { start, .. } => *start,
+            })
+            .unwrap_or(Time::ZERO)
+    }
+
+    /// Cuts this plan down to `[start, end)`, adjusting source in/out points.
+    ///
+    /// Used to split a long export into chunks that can be encoded in parallel.
+    /// The graph only cares about durations and source times, so the pieces keep
+    /// their absolute timeline positions but the command never reads them.
+    pub fn slice(&self, start: Time, end: Time) -> PrecisePlan {
+        let mut pieces = Vec::new();
+        for piece in &self.pieces {
+            match piece {
+                TimelinePiece::Clip(segment) => {
+                    let from = segment.timeline_start.max(start);
+                    let to = segment.timeline_end.min(end);
+                    if from >= to {
+                        continue;
+                    }
+                    let shift = from.saturating_sub(segment.timeline_start);
+                    let source_in = segment.source_in.saturating_add(shift);
+                    pieces.push(TimelinePiece::Clip(Segment {
+                        source_id: segment.source_id,
+                        source_in,
+                        source_out: source_in.saturating_add(to.saturating_sub(from)),
+                        timeline_start: from,
+                        timeline_end: to,
+                    }));
+                }
+                TimelinePiece::Gap {
+                    start: gap_start,
+                    end: gap_end,
+                } => {
+                    let from = (*gap_start).max(start);
+                    let to = (*gap_end).min(end);
+                    if from >= to {
+                        continue;
+                    }
+                    pieces.push(TimelinePiece::Gap {
+                        start: from,
+                        end: to,
+                    });
+                }
+            }
+        }
+
+        PrecisePlan {
+            pieces,
+            sources_with_audio: self.sources_with_audio.clone(),
+            duration: end.saturating_sub(start),
+            width: self.width,
+            height: self.height,
+            frame_rate: self.frame_rate,
+            settings: self.settings.clone(),
+            blocker: None,
+        }
+    }
+}
+
+/// One piece of a smart-cut export: either a lossless copy or a short
+/// re-encoded span between a cut point and a keyframe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SmartPiece {
+    pub source_id: crate::SourceId,
+    pub source_in: Time,
+    pub source_out: Time,
+    /// True when this span must be re-encoded (it is not keyframe-aligned).
+    pub encode: bool,
+}
+
+/// Encoder parameters needed to re-encode smart-cut boundary pieces so they
+/// concat cleanly with the copied ones.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SmartSource {
+    pub id: crate::SourceId,
+    pub codec: VideoCodecChoice,
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: crate::FrameRate,
+}
+
+/// A stream-copy fast path for precise exports.
+///
+/// Instead of re-encoding the whole timeline, keyframe-aligned spans are copied
+/// and only the short pieces between a cut point and the nearest keyframe are
+/// re-encoded. This mirrors LosslessCut's "smart cut".
+#[derive(Clone, Debug, PartialEq)]
+pub struct SmartCutPlan {
+    /// Pieces in export order.
+    pub pieces: Vec<SmartPiece>,
+    /// Per-source encoder parameters for the re-encoded pieces.
+    pub sources: Vec<SmartSource>,
+    /// How much of the export is copied rather than encoded.
+    pub copied: Time,
+    pub duration: Time,
+}
+
+impl SmartCutPlan {
+    pub fn source(&self, id: crate::SourceId) -> Option<&SmartSource> {
+        self.sources.iter().find(|source| source.id == id)
+    }
+}
+
+/// Builds a smart-cut plan when the timeline allows stream copying.
+///
+/// Returns `None` when the timeline cannot use the fast path: gaps, mixed
+/// geometry or frame rates, rotated sources, non-8-bit pixel formats, missing
+/// keyframes, codecs other than H.264/H.265, or too little copied material to
+/// be worth it. Callers fall back to a full re-encode.
+pub fn plan_smart_cut(
+    project: &Project,
+    start: Time,
+    end: Time,
+    settings: &PreciseSettings,
+) -> Option<SmartCutPlan> {
+    let pieces = super::timeline_pieces(project, start, end).ok()?;
+    if pieces.is_empty() || super::has_gaps(&pieces) {
+        return None;
+    }
+
+    let mut smart_sources: Vec<SmartSource> = Vec::new();
+    let mut reference: Option<(u32, u32, crate::FrameRate)> = None;
+
+    for segment in super::only_segments(&pieces) {
+        let source = project.source(segment.source_id)?;
+        let info = &source.info;
+        if info.video.rotation.rem_euclid(360) != 0 {
+            return None;
+        }
+        if info.video.pix_fmt.as_deref() != Some("yuv420p") {
+            return None;
+        }
+        let codec = match info.video.codec.as_str() {
+            "h264" => VideoCodecChoice::H264,
+            "hevc" | "h265" => VideoCodecChoice::H265,
+            _ => return None,
+        };
+        if source.keyframes.is_degraded() {
+            return None;
+        }
+        let (width, height) = info.display_size();
+        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+            return None;
+        }
+        if info.video.frame_rate.fps() <= 0.0 {
+            return None;
+        }
+
+        // Concatenating copied pieces only works when every source shares the
+        // coded geometry and rate.
+        match reference {
+            None => reference = Some((width, height, info.video.frame_rate)),
+            Some((w, h, rate)) => {
+                if (w, h, rate) != (width, height, info.video.frame_rate) {
+                    return None;
+                }
+            }
+        }
+
+        // A user-forced size or rate would need real resampling.
+        if settings.size.is_some_and(|size| size != (width, height)) {
+            return None;
+        }
+        if settings
+            .frame_rate
+            .is_some_and(|rate| rate != info.video.frame_rate)
+        {
+            return None;
+        }
+
+        if !smart_sources.iter().any(|item| item.id == source.id) {
+            smart_sources.push(SmartSource {
+                id: source.id,
+                codec,
+                width,
+                height,
+                frame_rate: info.video.frame_rate,
+            });
+        }
+    }
+
+    let mut smart_pieces: Vec<SmartPiece> = Vec::new();
+    let mut copied = Time::ZERO;
+
+    for segment in super::only_segments(&pieces) {
+        let source = project.source(segment.source_id)?;
+        let keyframes = source.keyframes.as_slice();
+        if keyframes.is_empty() {
+            return None;
+        }
+        let frame = source.info.video.frame_rate.frame_duration();
+        let half_frame = Time(frame.micros() / 2);
+
+        let start_is_key = keyframes
+            .iter()
+            .copied()
+            .find(|key| *key <= segment.source_in)
+            .is_some_and(|key| segment.source_in.saturating_sub(key) <= half_frame);
+
+        let copy_start = if start_is_key {
+            segment.source_in
+        } else {
+            match keyframes
+                .iter()
+                .copied()
+                .find(|key| *key >= segment.source_in)
+            {
+                Some(key) if key < segment.source_out => key,
+                _ => {
+                    // The whole segment sits inside one GOP.
+                    push_encode(
+                        &mut smart_pieces,
+                        &segment,
+                        segment.source_in,
+                        segment.source_out,
+                    );
+                    continue;
+                }
+            }
+        };
+
+        let end_is_key = keyframes
+            .iter()
+            .copied()
+            .find(|key| *key <= segment.source_out)
+            .is_some_and(|key| segment.source_out.saturating_sub(key) <= half_frame);
+
+        let copy_end = if end_is_key {
+            segment.source_out
+        } else {
+            match keyframes
+                .iter()
+                .copied()
+                .rev()
+                .find(|key| *key <= segment.source_out)
+            {
+                Some(key) if key > copy_start => key,
+                _ => {
+                    push_encode(
+                        &mut smart_pieces,
+                        &segment,
+                        segment.source_in,
+                        segment.source_out,
+                    );
+                    continue;
+                }
+            }
+        };
+
+        if copy_end.saturating_sub(copy_start) < frame {
+            push_encode(
+                &mut smart_pieces,
+                &segment,
+                segment.source_in,
+                segment.source_out,
+            );
+            continue;
+        }
+
+        if copy_start > segment.source_in {
+            push_encode(&mut smart_pieces, &segment, segment.source_in, copy_start);
+        }
+        smart_pieces.push(SmartPiece {
+            source_id: segment.source_id,
+            source_in: copy_start,
+            source_out: copy_end,
+            encode: false,
+        });
+        copied = copied.saturating_add(copy_end.saturating_sub(copy_start));
+        if segment.source_out > copy_end {
+            push_encode(&mut smart_pieces, &segment, copy_end, segment.source_out);
+        }
+    }
+
+    if smart_pieces.is_empty() || copied < Time::from_secs(2.0) {
+        return None;
+    }
+
+    Some(SmartCutPlan {
+        pieces: smart_pieces,
+        sources: smart_sources,
+        copied,
+        duration: end.saturating_sub(start),
+    })
+}
+
+fn push_encode(pieces: &mut Vec<SmartPiece>, segment: &Segment, from: Time, to: Time) {
+    if to <= from {
+        return;
+    }
+    pieces.push(SmartPiece {
+        source_id: segment.source_id,
+        source_in: from,
+        source_out: to,
+        encode: true,
+    });
+}
+
+/// Which streams a filter graph should produce.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum GraphStreams {
+    Both,
+    VideoOnly,
+    /// Video is dropped so a single continuous audio pass can be encoded for a
+    /// chunked export, avoiding gaps at chunk joins.
+    AudioOnly,
 }
 
 /// Builds and validates a precise plan for a timeline window.
@@ -230,7 +611,25 @@ pub fn plan_precise(
 /// `[i:v] trim,setpts,scale,pad [vN]` and `[i:a] atrim,asetpts,aresample [aN]`,
 /// then one `concat` joins them. Gaps are synthesised from `color` and
 /// `anullsrc` so the output has no timestamp holes.
+///
+/// Inputs are expected to be pre-seeked with `-ss <source_in>` by
+/// [`build_precise_command`], so every trim starts at zero. Doing the cut as an
+/// *input seek* is what keeps exports fast: a `trim` on an unseeked input makes
+/// FFmpeg decode the whole prefix first, which on a long recording costs more
+/// than the encode itself.
 pub fn build_filter_graph(plan: &PrecisePlan) -> String {
+    build_filter_graph_with(plan, GraphStreams::Both)
+}
+
+/// Like [`build_filter_graph`], but can emit video only or audio only.
+///
+/// The split exists for parallel exports: video is encoded in chunks that run
+/// concurrently, while audio is encoded once, continuously, so chunk joins do
+/// not introduce AAC gaps.
+pub fn build_filter_graph_with(plan: &PrecisePlan, streams: GraphStreams) -> String {
+    let want_video = streams != GraphStreams::AudioOnly;
+    let want_audio = streams != GraphStreams::VideoOnly;
+
     let mut chains: Vec<String> = Vec::new();
     let mut video_labels: Vec<String> = Vec::new();
     let mut audio_labels: Vec<String> = Vec::new();
@@ -245,43 +644,44 @@ pub fn build_filter_graph(plan: &PrecisePlan) -> String {
                     continue;
                 }
 
-                let v = format!("v{position}");
-                let a = format!("a{position}");
-
-                chains.push(format!(
-                    "[{input_index}:v]trim=start={start:.6}:duration={dur:.6},setpts=PTS-STARTPTS,\
+                if want_video {
+                    let v = format!("v{position}");
+                    chains.push(format!(
+                        "[{input_index}:v]trim=start=0:duration={dur:.6},setpts=PTS-STARTPTS,\
 scale={w}:{h}:force_original_aspect_ratio=decrease,\
 pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[{v}]",
-                    input_index = input_index,
-                    start = segment.source_in.as_secs_f64(),
-                    dur = duration,
-                    w = plan.width,
-                    h = plan.height,
-                    fps = plan.frame_rate.fps(),
-                    v = v
-                ));
-                video_labels.push(v);
-
-                // A segment whose source has no audio stream cannot link
-                // `[i:a]`; synthesise silence of the same length instead.
-                if plan.has_audio(segment.source_id) {
-                    chains.push(format!(
-                        "[{input_index}:a]atrim=start={start:.6}:duration={dur:.6},asetpts=PTS-STARTPTS,\
-aresample=async=1:first_pts=0[{a}]",
                         input_index = input_index,
-                        start = segment.source_in.as_secs_f64(),
                         dur = duration,
-                        a = a
+                        w = plan.width,
+                        h = plan.height,
+                        fps = plan.frame_rate.fps(),
+                        v = v
                     ));
-                } else {
-                    chains.push(format!(
-                        "anullsrc=r={rate}:cl=stereo,atrim=duration={dur:.6},asetpts=PTS-STARTPTS[{a}]",
-                        rate = 48_000,
-                        dur = duration,
-                        a = a
-                    ));
+                    video_labels.push(v);
                 }
-                audio_labels.push(a);
+
+                if want_audio {
+                    let a = format!("a{position}");
+                    // A segment whose source has no audio stream cannot link
+                    // `[i:a]`; synthesise silence of the same length instead.
+                    if plan.has_audio(segment.source_id) {
+                        chains.push(format!(
+                            "[{input_index}:a]atrim=start=0:duration={dur:.6},asetpts=PTS-STARTPTS,\
+aresample=async=1:first_pts=0[{a}]",
+                            input_index = input_index,
+                            dur = duration,
+                            a = a
+                        ));
+                    } else {
+                        chains.push(format!(
+                            "anullsrc=r={rate}:cl=stereo,atrim=duration={dur:.6},asetpts=PTS-STARTPTS[{a}]",
+                            rate = 48_000,
+                            dur = duration,
+                            a = a
+                        ));
+                    }
+                    audio_labels.push(a);
+                }
 
                 input_index += 1;
             }
@@ -292,48 +692,62 @@ aresample=async=1:first_pts=0[{a}]",
                     continue;
                 }
 
-                let v = format!("v{position}");
-                let a = format!("a{position}");
-                chains.push(format!(
-                    "color=c=black:s={w}x{h}:r={fps}:d={dur:.6},setsar=1[{v}]",
-                    w = plan.width,
-                    h = plan.height,
-                    fps = plan.frame_rate.fps(),
-                    dur = duration,
-                    v = v
-                ));
-                chains.push(format!(
-                    "anullsrc=r={rate}:cl=stereo,atrim=duration={dur:.6}[{a}]",
-                    rate = 48_000,
-                    dur = duration,
-                    a = a
-                ));
-                video_labels.push(v);
-                audio_labels.push(a);
+                if want_video {
+                    let v = format!("v{position}");
+                    chains.push(format!(
+                        "color=c=black:s={w}x{h}:r={fps}:d={dur:.6},setsar=1[{v}]",
+                        w = plan.width,
+                        h = plan.height,
+                        fps = plan.frame_rate.fps(),
+                        dur = duration,
+                        v = v
+                    ));
+                    video_labels.push(v);
+                }
+                if want_audio {
+                    let a = format!("a{position}");
+                    chains.push(format!(
+                        "anullsrc=r={rate}:cl=stereo,atrim=duration={dur:.6}[{a}]",
+                        rate = 48_000,
+                        dur = duration,
+                        a = a
+                    ));
+                    audio_labels.push(a);
+                }
             }
         }
     }
 
-    let inputs: String = video_labels
-        .iter()
-        .zip(audio_labels.iter())
-        .map(|(v, a)| format!("[{v}][{a}]"))
-        .collect();
+    let inputs: String = match streams {
+        GraphStreams::Both => video_labels
+            .iter()
+            .zip(audio_labels.iter())
+            .map(|(v, a)| format!("[{v}][{a}]"))
+            .collect(),
+        GraphStreams::VideoOnly => video_labels.iter().map(|v| format!("[{v}]")).collect(),
+        GraphStreams::AudioOnly => audio_labels.iter().map(|a| format!("[{a}]")).collect(),
+    };
 
-    let concat = format!(
-        "{inputs}concat=n={n}:v=1:a=1[vout][aout]",
-        inputs = inputs,
-        n = video_labels.len()
-    );
+    let n = match streams {
+        GraphStreams::AudioOnly => audio_labels.len(),
+        _ => video_labels.len(),
+    };
+    let (v_flag, a_flag, output_labels) = match streams {
+        GraphStreams::Both => (1, 1, "[vout][aout]"),
+        GraphStreams::VideoOnly => (1, 0, "[vout]"),
+        GraphStreams::AudioOnly => (0, 1, "[aout]"),
+    };
 
-    chains.push(concat);
+    chains.push(format!(
+        "{inputs}concat=n={n}:v={v_flag}:a={a_flag}{output_labels}"
+    ));
     chains.join(";")
 }
 
 /// Builds the full `ffmpeg` command for a precise export.
 ///
-/// `segments` is passed separately from the plan so the caller can supply the
-/// real input paths in export order.
+/// `segment_inputs` is passed separately from the plan so the caller can supply
+/// the real input paths in export order.
 pub fn build_precise_command(
     install: &FfmpegInstall,
     plan: &PrecisePlan,
@@ -342,65 +756,117 @@ pub fn build_precise_command(
     output_for_container: &Path,
     has_audio_anywhere: bool,
 ) -> Result<Command, ExportBlocker> {
-    let encoder = plan
-        .settings
-        .codec
-        .encoder(install)
-        .ok_or_else(|| ExportBlocker::UnsupportedContainer("encoder unavailable".to_owned()))?;
-
     let container = super::container_for(output_for_container)
         .ok_or_else(|| ExportBlocker::UnsupportedContainer("unknown container".to_owned()))?;
+    build_precise_command_for(
+        install,
+        plan,
+        segment_inputs,
+        temp_output,
+        container,
+        has_audio_anywhere,
+        GraphStreams::Both,
+    )
+}
+
+/// Builds a precise-export command for an explicit container and stream set.
+///
+/// Chunked exports use [`GraphStreams::VideoOnly`] with `"mpegts"` for the
+/// pieces and [`GraphStreams::AudioOnly`] with `"ipod"` for the single audio
+/// pass, then mux the results.
+#[allow(clippy::too_many_arguments)]
+pub fn build_precise_command_for(
+    install: &FfmpegInstall,
+    plan: &PrecisePlan,
+    segment_inputs: &[PathBuf],
+    temp_output: &Path,
+    container: &str,
+    has_audio_anywhere: bool,
+    streams: GraphStreams,
+) -> Result<Command, ExportBlocker> {
+    let encoder =
+        if streams == GraphStreams::AudioOnly {
+            None
+        } else {
+            Some(plan.settings.codec.encoder(install).ok_or_else(|| {
+                ExportBlocker::UnsupportedContainer("encoder unavailable".to_owned())
+            })?)
+        };
 
     let mut cmd = hidden_command(&install.ffmpeg);
     cmd.args(["-hide_banner", "-nostdin", "-y"]);
 
-    for path in segment_inputs {
+    // Seek each input to its in point. Without this the trim filter decodes
+    // the entire prefix of every source before the cut, which dominates export
+    // time for clips taken from late in a long recording.
+    for (segment, path) in plan.segments().iter().zip(segment_inputs.iter()) {
+        cmd.arg("-ss")
+            .arg(format!("{:.6}", segment.source_in.as_secs_f64()));
         cmd.arg("-i").arg(path);
     }
 
     // Gap synthesis needs a silent-audio template if any segment lacks audio.
-    let needs_silence = plan.has_gaps() || !has_audio_anywhere;
-    if needs_silence {
-        cmd.args(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]);
+    if streams != GraphStreams::VideoOnly {
+        let needs_silence = plan.has_gaps() || !has_audio_anywhere;
+        if needs_silence {
+            cmd.args(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]);
+        }
     }
 
-    let graph = build_filter_graph(plan);
+    let graph = build_filter_graph_with(plan, streams);
     cmd.args(["-filter_complex", &graph]);
-    cmd.args(["-map", "[vout]", "-map", "[aout]"]);
-
-    // Video encoding.
-    cmd.args(["-c:v", encoder]);
-    match plan.settings.codec {
-        VideoCodecChoice::Vp9 => {
-            cmd.args(["-crf", &plan.settings.crf.to_string()]);
-            cmd.args(["-b:v", "0"]);
-            cmd.args(["-row-mt", "1"]);
+    match streams {
+        GraphStreams::Both => {
+            cmd.args(["-map", "[vout]", "-map", "[aout]"]);
         }
-        VideoCodecChoice::H265 => {
-            cmd.args(["-crf", &plan.settings.crf.to_string()]);
-            cmd.args(["-preset", "medium"]);
-            // libx265 writes its banner to stderr, which pollutes the log tail.
-            cmd.args(["-x265-params", "log-level=error"]);
+        GraphStreams::VideoOnly => {
+            cmd.args(["-map", "[vout]", "-an"]);
         }
-        VideoCodecChoice::H264 => {
-            cmd.args(["-crf", &plan.settings.crf.to_string()]);
-            cmd.args(["-preset", "medium"]);
-            cmd.args(["-pix_fmt", "yuv420p"]);
+        GraphStreams::AudioOnly => {
+            cmd.args(["-map", "[aout]", "-vn"]);
         }
     }
 
-    // Audio encoding: match the container.
-    match container {
-        "webm" => {
-            if install.version.encoders.libopus {
-                cmd.args(["-c:a", "libopus"]);
-            } else {
-                cmd.args(["-c:a", "libvorbis"]);
+    if let Some(encoder) = encoder {
+        cmd.args(["-c:v", encoder]);
+        match plan.settings.codec {
+            VideoCodecChoice::Vp9 => {
+                cmd.args(["-crf", &plan.settings.crf.to_string()]);
+                cmd.args(["-b:v", "0"]);
+                cmd.args(["-row-mt", "1"]);
+                // The default VP9 settings are orders of magnitude slower than
+                // the other encoders; `good` + `cpu-used` is the standard dial.
+                cmd.args(["-deadline", "good"]);
+                cmd.args(["-cpu-used", &plan.settings.speed.vp9_cpu_used().to_string()]);
+            }
+            VideoCodecChoice::H265 => {
+                cmd.args(["-crf", &plan.settings.crf.to_string()]);
+                cmd.args(["-preset", plan.settings.speed.x265_preset()]);
+                // libx265 writes its banner to stderr, which pollutes the log.
+                cmd.args(["-x265-params", "log-level=error"]);
+            }
+            VideoCodecChoice::H264 => {
+                cmd.args(["-crf", &plan.settings.crf.to_string()]);
+                cmd.args(["-preset", plan.settings.speed.x264_preset()]);
+                cmd.args(["-pix_fmt", "yuv420p"]);
             }
         }
-        _ => {
-            cmd.args(["-c:a", "aac"]);
-            cmd.args(["-b:a", &format!("{}k", plan.settings.audio_bitrate_kbps)]);
+    }
+
+    if streams != GraphStreams::VideoOnly {
+        // Audio encoding: match the container.
+        match container {
+            "webm" => {
+                if install.version.encoders.libopus {
+                    cmd.args(["-c:a", "libopus"]);
+                } else {
+                    cmd.args(["-c:a", "libvorbis"]);
+                }
+            }
+            _ => {
+                cmd.args(["-c:a", "aac"]);
+                cmd.args(["-b:a", &format!("{}k", plan.settings.audio_bitrate_kbps)]);
+            }
         }
     }
 
@@ -538,13 +1004,276 @@ mod tests {
         );
         let graph = build_filter_graph(&plan);
 
-        assert!(graph.contains("trim=start="), "{graph}");
+        // The in point is applied as an input seek, so every trim starts at 0.
+        assert!(graph.contains("trim=start=0:duration=3.000000"), "{graph}");
         assert!(graph.contains("setpts=PTS-STARTPTS"), "{graph}");
         assert!(graph.contains("scale=1280:720"), "{graph}");
         assert!(graph.contains("pad=1280:720"), "{graph}");
         assert!(graph.contains("setsar=1"), "{graph}");
-        assert!(graph.contains("atrim=start="), "{graph}");
+        assert!(graph.contains("atrim=start=0:duration=3.000000"), "{graph}");
         assert!(graph.contains("concat=n=2:v=1:a=1[vout][aout]"), "{graph}");
+    }
+
+    #[test]
+    fn command_seeks_each_input_to_its_in_point() {
+        let project = project(&[4.0, 3.0], &[]);
+        // Start one second in: the first segment's in point is 1 s, and the
+        // second segment keeps its own (0 s) in point.
+        let plan = plan_precise(
+            &project,
+            Time::from_secs(1.0),
+            Time::from_secs(6.0),
+            PreciseSettings::default(),
+        );
+
+        let cmd = build_precise_command(
+            &install_with(full_encoders()),
+            &plan,
+            &[PathBuf::from("C:/a.mp4"), PathBuf::from("C:/b.mp4")],
+            Path::new("C:/out.part"),
+            Path::new("C:/out.mp4"),
+            true,
+        )
+        .unwrap();
+
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+
+        // Each `-ss` must be immediately before its own `-i`.
+        assert_eq!(args[4], "1.000000", "{args:?}");
+        assert_eq!(args[5], "-i");
+        assert_eq!(args[6], "C:/a.mp4");
+        assert_eq!(args[7], "-ss");
+        assert_eq!(args[8], "0.000000");
+        assert_eq!(args[9], "-i");
+        assert_eq!(args[10], "C:/b.mp4");
+    }
+
+    #[test]
+    fn smart_cut_copies_between_keyframes_and_encodes_the_edges() {
+        let mut project = Project::empty();
+        let id = project.alloc_source_id();
+        let mut media = info("a.mp4", 10.0);
+        media.duration = Time::from_secs(10.0);
+        let mut source = MediaSource::new(
+            id,
+            media,
+            KeyframeIndex::new(vec![
+                Time::ZERO,
+                Time::from_secs(2.0),
+                Time::from_secs(4.0),
+                Time::from_secs(6.0),
+                Time::from_secs(8.0),
+            ]),
+        );
+        source.id = id;
+        let clip_id = project.add_source(source);
+
+        let plan = plan_smart_cut(
+            &project,
+            Time::from_secs(1.0),
+            Time::from_secs(7.0),
+            &PreciseSettings::default(),
+        )
+        .expect("smart cut should apply");
+        assert_eq!(plan.pieces.len(), 3, "{:?}", plan.pieces);
+        assert!(plan.pieces[0].encode);
+        assert_eq!(plan.pieces[0].source_in, Time::from_secs(1.0));
+        assert_eq!(plan.pieces[0].source_out, Time::from_secs(2.0));
+        assert!(!plan.pieces[1].encode);
+        assert_eq!(plan.pieces[1].source_in, Time::from_secs(2.0));
+        assert_eq!(plan.pieces[1].source_out, Time::from_secs(6.0));
+        assert!(plan.pieces[2].encode);
+        assert_eq!(plan.pieces[2].source_in, Time::from_secs(6.0));
+        assert_eq!(plan.pieces[2].source_out, Time::from_secs(7.0));
+        assert_eq!(plan.copied, Time::from_secs(4.0));
+        let _ = clip_id;
+    }
+
+    #[test]
+    fn smart_cut_skips_gaps_and_small_savings() {
+        // A gap rules the fast path out: gap filling uses synthetic sources.
+        let project = project(&[3.0, 3.0], &[0.0, 5.0]);
+        assert!(plan_smart_cut(
+            &project,
+            Time::ZERO,
+            Time::from_secs(8.0),
+            &PreciseSettings::default()
+        )
+        .is_none());
+
+        // A single clip entirely inside one GOP has nothing to copy.
+        let mut project = Project::empty();
+        let id = project.alloc_source_id();
+        let mut media = info("a.mp4", 10.0);
+        media.duration = Time::from_secs(10.0);
+        let mut source = MediaSource::new(id, media, KeyframeIndex::new(vec![Time::ZERO]));
+        source.id = id;
+        project.add_source(source);
+        assert!(plan_smart_cut(
+            &project,
+            Time::from_secs(1.0),
+            Time::from_secs(3.0),
+            &PreciseSettings::default()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn smart_cut_rejects_rotated_sources() {
+        let mut project = Project::empty();
+        let id = project.alloc_source_id();
+        let mut media = info("a.mp4", 10.0);
+        media.video.rotation = 90;
+        let mut source = MediaSource::new(
+            id,
+            media,
+            KeyframeIndex::new(vec![Time::ZERO, Time::from_secs(2.0)]),
+        );
+        source.id = id;
+        project.add_source(source);
+        assert!(plan_smart_cut(
+            &project,
+            Time::ZERO,
+            Time::from_secs(6.0),
+            &PreciseSettings::default()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn slicing_keeps_durations_and_source_times_aligned() {
+        let project = project(&[4.0, 3.0], &[]);
+        let plan = plan_precise(
+            &project,
+            Time::from_secs(1.0),
+            Time::from_secs(6.0),
+            PreciseSettings::default(),
+        );
+
+        // Second half of the export starts 2.5 s into the first plan.
+        let slice = plan.slice(Time::from_secs(3.5), Time::from_secs(6.0));
+        assert_eq!(slice.duration, Time::from_secs(2.5));
+
+        let segments = slice.segments();
+        assert_eq!(segments.len(), 2);
+        // First segment: in the full plan it starts at source 1 s; the slice
+        // starts 2.5 s later, so source_in must be 3.5 s.
+        assert_eq!(segments[0].source_in, Time::from_secs(3.5));
+        assert_eq!(segments[0].duration(), Time::from_secs(0.5));
+        // Second segment starts exactly at the timeline cut.
+        assert_eq!(segments[1].source_in, Time::ZERO);
+        assert_eq!(segments[1].duration(), Time::from_secs(2.0));
+
+        let total: Time = segments
+            .iter()
+            .fold(Time::ZERO, |acc, s| acc.saturating_add(s.duration()));
+        assert_eq!(total, Time::from_secs(2.5));
+    }
+
+    #[test]
+    fn slicing_preserves_gaps() {
+        let project = project(&[3.0, 3.0], &[0.0, 5.0]);
+        let plan = plan_precise(
+            &project,
+            Time::ZERO,
+            Time::from_secs(8.0),
+            PreciseSettings::default(),
+        );
+        let slice = plan.slice(Time::from_secs(4.0), Time::from_secs(7.0));
+        assert!(slice.has_gaps(), "{:?}", slice.pieces);
+        assert_eq!(slice.duration, Time::from_secs(3.0));
+    }
+
+    #[test]
+    fn video_only_graph_has_no_audio_links() {
+        let project = project(&[4.0], &[]);
+        let plan = plan_precise(
+            &project,
+            Time::ZERO,
+            Time::from_secs(4.0),
+            PreciseSettings::default(),
+        );
+        let graph = build_filter_graph_with(&plan, GraphStreams::VideoOnly);
+        assert!(!graph.contains(":a]"), "{graph}");
+        assert!(graph.contains("concat=n=1:v=1:a=0[vout]"), "{graph}");
+        assert!(graph.contains("trim=start=0"), "{graph}");
+    }
+
+    #[test]
+    fn audio_only_graph_has_no_video_links() {
+        let project = project(&[4.0], &[]);
+        let plan = plan_precise(
+            &project,
+            Time::ZERO,
+            Time::from_secs(4.0),
+            PreciseSettings::default(),
+        );
+        let graph = build_filter_graph_with(&plan, GraphStreams::AudioOnly);
+        assert!(!graph.contains(":v]"), "{graph}");
+        assert!(graph.contains("concat=n=1:v=0:a=1[aout]"), "{graph}");
+        assert!(graph.contains("atrim=start=0"), "{graph}");
+    }
+
+    #[test]
+    fn audio_only_command_drops_video_encoder() {
+        let project = project(&[4.0], &[]);
+        let plan = plan_precise(
+            &project,
+            Time::ZERO,
+            Time::from_secs(4.0),
+            PreciseSettings::default(),
+        );
+        let cmd = build_precise_command_for(
+            &install_with(full_encoders()),
+            &plan,
+            &[PathBuf::from("C:/a.mp4")],
+            Path::new("C:/out.m4a"),
+            "ipod",
+            true,
+            GraphStreams::AudioOnly,
+        )
+        .unwrap();
+        let joined: String = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(!joined.contains("-c:v"), "{joined}");
+        assert!(joined.contains("-c:a aac"), "{joined}");
+        assert!(joined.contains("-map [aout]"), "{joined}");
+        assert!(joined.contains("-f ipod"), "{joined}");
+    }
+
+    #[test]
+    fn speed_choices_map_to_encoder_presets() {
+        let project = project(&[4.0], &[]);
+        let plan_for = |speed| {
+            let settings = PreciseSettings {
+                speed,
+                ..PreciseSettings::default()
+            };
+            let plan = plan_precise(&project, Time::ZERO, Time::from_secs(4.0), settings);
+            let cmd = build_precise_command(
+                &install_with(full_encoders()),
+                &plan,
+                &[PathBuf::from("C:/a.mp4")],
+                Path::new("C:/out.part"),
+                Path::new("C:/out.mp4"),
+                true,
+            )
+            .unwrap();
+            cmd.get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+
+        assert!(plan_for(EncoderSpeed::Fast).contains("-preset veryfast"));
+        assert!(plan_for(EncoderSpeed::Balanced).contains("-preset fast"));
+        assert!(plan_for(EncoderSpeed::Quality).contains("-preset medium"));
     }
 
     #[test]
@@ -603,6 +1332,7 @@ mod tests {
 
         assert!(joined.contains("-c:v libx264"), "{joined}");
         assert!(joined.contains("-crf 18"), "{joined}");
+        assert!(joined.contains("-preset veryfast"), "{joined}");
         assert!(joined.contains("-c:a aac"), "{joined}");
         assert!(joined.contains("-b:a 192k"), "{joined}");
         assert!(joined.contains("-filter_complex"), "{joined}");

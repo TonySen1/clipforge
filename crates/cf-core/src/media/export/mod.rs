@@ -23,7 +23,9 @@ pub use lossless::{
     validate_output, LosslessPlan, LosslessRequest,
 };
 pub use precise::{
-    build_precise_command, plan_precise, PrecisePlan, PreciseSettings, VideoCodecChoice,
+    build_filter_graph_with, build_precise_command, build_precise_command_for, plan_precise,
+    plan_smart_cut, EncoderSpeed, GraphStreams, PrecisePlan, PreciseSettings, SmartCutPlan,
+    SmartPiece, SmartSource, VideoCodecChoice,
 };
 
 use crate::domain::Project;

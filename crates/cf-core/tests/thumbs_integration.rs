@@ -1,4 +1,4 @@
-//! Integration test for the keyframe scrub strip.
+//! Integration test for the scrub strip.
 //!
 //! Runs real FFmpeg, so it is ignored by default:
 //!
@@ -6,7 +6,7 @@
 //! cargo test --test thumbs_integration -- --ignored --nocapture
 //! ```
 
-use cf_core::media::{discover, keyframes, probe, thumbs};
+use cf_core::media::{discover, probe, thumbs};
 use std::path::{Path, PathBuf};
 
 fn fixture(name: &str) -> PathBuf {
@@ -17,52 +17,76 @@ fn fixture(name: &str) -> PathBuf {
 
 #[test]
 #[ignore = "requires a real FFmpeg"]
-fn builds_a_strip_from_real_keyframes() {
+fn builds_and_decodes_a_strip() {
     let (install, _) = discover(None).expect("FFmpeg is required");
     let path = fixture("sample_h264.mp4");
 
     let info = probe::probe(&install, &path).expect("probe");
-    let index = keyframes::probe(&install, &path).expect("keyframes");
-    assert!(!index.is_empty(), "fixture should have keyframes");
 
     let strip = thumbs::build(
         &install,
         &path,
         &info,
-        &index,
         thumbs::STRIP_MAX_EDGE,
         thumbs::STRIP_BUDGET_BYTES,
     )
     .expect("building the strip");
 
+    assert!(!strip.is_empty(), "strip should hold samples");
     assert!(
-        !strip.is_empty(),
-        "strip should contain at least one decoded keyframe"
+        strip.width().max(strip.height()) <= thumbs::STRIP_MAX_EDGE,
+        "samples must stay within the edge cap"
     );
     assert!(
-        strip.len() <= index.len(),
-        "the strip never holds more frames than there are keyframes"
+        strip.len() <= thumbs::STRIP_MAX_FRAMES,
+        "sample count must stay within the cap"
     );
 
-    // Every frame must be a complete RGBA buffer at the strip size.
-    let frame = strip.at_or_before(cf_core::Time::from_secs(1.0)).unwrap();
+    // Every sample must decode to a real RGBA buffer.
+    let index = strip
+        .index_at_or_before(cf_core::Time::from_secs(1.0))
+        .expect("every position resolves to a sample");
+    let frame = strip.decode(index).expect("decoding a sample");
     assert!(frame.width > 0 && frame.height > 0);
     assert_eq!(
         frame.rgba.len(),
         frame.width as usize * frame.height as usize * 4
     );
-    assert!(
-        frame.width.max(frame.height) <= thumbs::STRIP_MAX_EDGE,
-        "strip frames must stay within the edge cap"
-    );
 
-    // Times stay ordered so `at_or_before` is a valid lookup.
+    // Times are ordered, so the lookup is meaningful.
     let mut previous = cf_core::Time::ZERO;
     for probe_time in [0.0, 0.5, 1.5, 3.0] {
         let found = strip
-            .at_or_before(cf_core::Time::from_secs(probe_time))
-            .expect("every position resolves to a frame");
-        assert!(found.time >= previous || probe_time == 0.0);
-        previous = found.time;
+            .index_at_or_before(cf_core::Time::from_secs(probe_time))
+            .expect("every position resolves");
+        let time = strip.time_at(found).unwrap();
+        assert!(time >= previous || probe_time == 0.0);
+        previous = time;
     }
+}
+
+#[test]
+#[ignore = "requires a real FFmpeg"]
+fn strip_is_dense_enough_for_short_clips() {
+    let (install, _) = discover(None).expect("FFmpeg is required");
+    let path = fixture("sample_h264.mp4");
+    let info = probe::probe(&install, &path).expect("probe");
+
+    let strip = thumbs::build(
+        &install,
+        &path,
+        &info,
+        thumbs::STRIP_MAX_EDGE,
+        thumbs::STRIP_BUDGET_BYTES,
+    )
+    .expect("building the strip");
+
+    // The whole point of the strip is showing a frame close to the pointer, so
+    // a 4 s fixture must yield several samples, not one per keyframe.
+    let seconds = info.duration.as_secs_f64();
+    assert!(
+        strip.len() as f64 >= seconds * 2.0,
+        "expected at least 2 samples/s, got {} samples over {seconds}s",
+        strip.len()
+    );
 }

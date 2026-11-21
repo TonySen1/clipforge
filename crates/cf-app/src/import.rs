@@ -133,8 +133,6 @@ impl ImportWorker {
                             // Cheap `Arc` clones so the strip can be built after
                             // the source itself has been handed to the UI.
                             let strip_info = source.info.clone();
-                            let strip_keyframes = source.keyframes.clone();
-
                             let _ = event_tx.send(ImportEvent::Metadata {
                                 source,
                                 keyframe_warning: warning,
@@ -148,7 +146,6 @@ impl ImportWorker {
                                 &install,
                                 &path,
                                 &strip_info,
-                                &strip_keyframes,
                                 thumbs::STRIP_MAX_EDGE,
                                 thumbs::STRIP_BUDGET_BYTES,
                             );
@@ -162,7 +159,7 @@ impl ImportWorker {
                                 }
                                 Ok(_) => {}
                                 Err(err) => log::warn!(
-                                    "keyframe strip for {} failed: {}",
+                                    "scrub strip for {} failed: {}",
                                     path.display(),
                                     err.detail()
                                 ),

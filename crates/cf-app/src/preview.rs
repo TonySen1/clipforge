@@ -16,8 +16,7 @@
 
 use crate::frame_cache::FrameCache;
 use cf_core::media::{
-    decode_frame, preview_size, FfmpegInstall, Frame, KeyframeStrip, MediaInfo, PlaybackProcess,
-    PreviewSize,
+    decode_frame, preview_size, FfmpegInstall, Frame, MediaInfo, PlaybackProcess, PreviewSize,
 };
 use cf_core::time::Time;
 use cf_core::SourceId;
@@ -49,13 +48,6 @@ pub enum PreviewRequest {
         path: PathBuf,
         info: Arc<MediaInfo>,
         max_edge: u32,
-        /// Scrub strip, when one has been decoded for this source.
-        thumbs: Option<Arc<KeyframeStrip>>,
-    },
-    /// The scrub strip finished decoding after the source was set.
-    Thumbs {
-        id: SourceId,
-        strip: Arc<KeyframeStrip>,
     },
     /// Drops cached frames, e.g. after the preview quality changed.
     ClearCache,
@@ -158,7 +150,6 @@ struct ActiveSource {
     path: PathBuf,
     info: Arc<MediaInfo>,
     size: PreviewSize,
-    thumbs: Option<Arc<KeyframeStrip>>,
 }
 
 /// A running playback thread.
@@ -226,7 +217,6 @@ fn run_loop(rx: Receiver<PreviewRequest>, event_tx: Sender<PreviewEvent>, ctx: e
                 path,
                 info,
                 max_edge,
-                thumbs,
             } => {
                 if let Some(playback) = playback.take() {
                     playback.stop();
@@ -238,18 +228,7 @@ fn run_loop(rx: Receiver<PreviewRequest>, event_tx: Sender<PreviewEvent>, ctx: e
                     path,
                     info,
                     size,
-                    thumbs,
                 });
-            }
-            PreviewRequest::Thumbs { id, strip } => {
-                // Only meaningful when it belongs to the source in use; a strip
-                // for a source the worker moved away from would never be asked
-                // for and is dropped.
-                if let Some(active) = &mut source {
-                    if active.id == id {
-                        active.thumbs = Some(strip);
-                    }
-                }
             }
             PreviewRequest::ClearCache => {
                 cache.clear();
@@ -445,7 +424,6 @@ mod tests {
             path: fixture,
             info,
             max_edge: 360,
-            thumbs: None,
         });
 
         // A drag: one seek per pointer move, generations only ever increase.
